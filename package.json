@@ -1,7 +1,7 @@
 {
-  "name": "msg-for-thunderbird",
+  "name": "msg-opener-for-thunderbird",
   "version": "0.1.0",
-  "description": "Thunderbird add-on that opens Outlook .msg files. Converts locally with msg-eml-core; no network access.",
+  "description": "MSG Opener for Thunderbird: a Thunderbird add-on that opens Outlook .msg files. Converts locally with msg-eml-core; no network access.",
   "license": "Apache-2.0",
   "private": true,
   "type": "module",
@@ -13,5 +13,8 @@
   },
   "engines": {
     "node": ">=20"
+  },
+  "devDependencies": {
+    "web-ext": "10.7.0"
   }
 }
