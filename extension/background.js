@@ -2,10 +2,13 @@
 // button, and runs the attachment flow. No network access is used anywhere.
 import * as core from './core/msg-eml-core.js';
 import { isMsgAttachment, openMsgAttachments } from './lib/glue.js';
-import { makeShowNotice } from './lib/notice.js';
+import { makeShowNotice, makeProgress } from './lib/notice.js';
+import { workerConverter } from './lib/worker-converter.js';
 
 const api = globalThis.messenger;
 const showNotice = makeShowNotice(api);
+const progress = makeProgress(api);
+const convert = workerConverter(core);
 const MENU_ID = 'open-msg';
 
 async function createMenus() {
@@ -33,7 +36,7 @@ api.menus.onShown.addListener(async (info) => {
 
 api.menus.onClicked.addListener((info, tab) => {
   if (info.menuItemId !== MENU_ID) return;
-  openMsgAttachments(api, core, tab, info.attachments, { showNotice }).catch((e) =>
+  openMsgAttachments(api, convert, tab, info.attachments, { showNotice, progress }).catch((e) =>
     showNotice({ title: 'The attachment could not be opened', lines: [String(e && e.message ? e.message : e)] }));
 });
 

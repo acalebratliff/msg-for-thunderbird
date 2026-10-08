@@ -25,7 +25,7 @@ if (manifest.version !== pkg.version) {
   console.error(`manifest.json version ${manifest.version} differs from package.json ${pkg.version}`);
   process.exit(1);
 }
-if ((manifest.permissions || []).some((p) => /^(<all_urls>|\*:|https?:|sensitiveDataUpload)/.test(p)) || manifest.host_permissions) {
+if ([...(manifest.permissions || []), ...(manifest.optional_permissions || [])].some((p) => /^(<all_urls>|\*:|https?:|sensitiveDataUpload)/.test(p)) || manifest.host_permissions) {
   console.error('manifest asks for network or host access; this add-on must not');
   process.exit(1);
 }

@@ -9,9 +9,9 @@ const root = fileURLToPath(new URL('..', import.meta.url));
 const manifest = JSON.parse(readFileSync(join(root, 'extension', 'manifest.json'), 'utf8'));
 
 test('permissions are exactly the justified set; no host or network access', () => {
-  assert.deepEqual([...manifest.permissions].sort(), ['accountsRead', 'menus', 'messagesImport', 'messagesRead', 'scripting']);
+  assert.deepEqual([...manifest.permissions].sort(), ['menus', 'messagesRead', 'scripting']);
+  assert.deepEqual([...manifest.optional_permissions].sort(), ['accountsRead', 'messagesImport']);
   assert.equal(manifest.host_permissions, undefined);
-  assert.equal(manifest.optional_permissions, undefined);
   assert.equal(manifest.content_security_policy, undefined, 'default CSP: no remote scripts');
   assert.deepEqual(manifest.browser_specific_settings.gecko.data_collection_permissions, { required: ['none'] });
 });

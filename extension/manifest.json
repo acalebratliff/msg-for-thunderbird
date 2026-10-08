@@ -32,7 +32,9 @@
   "permissions": [
     "messagesRead",
     "menus",
-    "scripting",
+    "scripting"
+  ],
+  "optional_permissions": [
     "accountsRead",
     "messagesImport"
   ]
