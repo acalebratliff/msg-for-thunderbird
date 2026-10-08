@@ -1,7 +1,7 @@
 // The add-on page: pick or drop .msg files, then open each one or import it
 // into a folder. All DOM is built with createElement and textContent.
 import * as core from '../core/msg-eml-core.js';
-import { openMsgFile, importMsgFile, requestImportPermissions, ConversionError, warningHeading } from '../lib/glue.js';
+import { openMsgFile, importMsgFile, ConversionError, warningHeading } from '../lib/glue.js';
 import { makeShowNotice } from '../lib/notice.js';
 import { workerConverter } from '../lib/worker-converter.js';
 
@@ -46,27 +46,14 @@ function setMode(value) {
 
 for (const r of document.querySelectorAll('input[name="mode"]')) {
   r.addEventListener('change', async () => {
-    if (mode() !== 'import') {
-      setMode('open');
-      return;
-    }
-    // accountsRead and messagesImport are optional; ask on first use (a user action).
-    let granted = false;
-    try {
-      granted = await requestImportPermissions(api); // first call in the handler: keeps the user action
-    } catch (e) {
-      granted = false;
-    }
-    if (!granted) {
-      setMode('open');
-      addResult('Import into folder', 'Not available: the permission to read folders and import messages was not given.', true);
-      return;
-    }
-    setMode('import');
-    try {
-      await loadFolders();
-    } catch (e) {
-      addResult('Folders', `The folder list could not be read: ${e.message || e}`, true);
+    const imp = mode() === 'import';
+    setMode(imp ? 'import' : 'open');
+    if (imp) {
+      try {
+        await loadFolders();
+      } catch (e) {
+        addResult('Folders', `The folder list could not be read: ${e.message || e}`, true);
+      }
     }
   });
 }

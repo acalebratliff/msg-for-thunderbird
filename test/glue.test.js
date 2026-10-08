@@ -10,7 +10,7 @@ import * as core from '../core/msg-eml-core.js';
 import {
   isMsgAttachment, emlName, convertMsg, convertMsgBytes, convertFile, collectWarnings, ConversionError,
   openMsgFile, importMsgFile, openMsgAttachments, showWarnings, messagesOf, inThreadConverter,
-  requestImportPermissions, IMPORT_PERMISSIONS, MAX_MSG_BYTES,
+  MAX_MSG_BYTES,
 } from '../extension/lib/glue.js';
 
 const convert = inThreadConverter(core);
@@ -46,10 +46,6 @@ function fakeApi({ attachments = {}, displayed = [{ id: 7 }], inject = 'shown', 
         if (importError) throw new Error(importError);
         return { id: 55, subject: 'x' };
       },
-    },
-    permissions: {
-      async contains(p) { return granted && JSON.stringify(p) === JSON.stringify(IMPORT_PERMISSIONS); },
-      async request(p) { calls.request.push(p); return granted; },
     },
     scripting: {
       async executeScript(inj) {
@@ -303,16 +299,6 @@ test('fallback match also checks size and refuses two matching messages', async 
   await openMsgAttachments(two, convert, { id: 5 }, [{ name: 'simple.msg', partName: '1.3', size: f.size }], { showNotice: n2 });
   assert.equal(two.calls.getAttachmentFile.length, 0);
   assert.match(n2.notices[0].lines[0], /more than one displayed message has that attachment/);
-});
-
-test('import needs the optional permissions; asking goes straight to permissions.request', async () => {
-  const no = fakeApi({ granted: false });
-  await assert.rejects(importMsgFile(no, convert, fxFile('simple.msg'), 'f'), (e) => e.code === 'NO_PERMISSION' && /not allowed to import/.test(e.message));
-  assert.equal(no.calls.import.length, 0);
-  assert.equal(await requestImportPermissions(no), false);
-  assert.deepEqual(no.calls.request, [IMPORT_PERMISSIONS]);
-  const yes = fakeApi();
-  assert.equal(await requestImportPermissions(yes), true);
 });
 
 test('the worker converts and reports errors in the same shape', async () => {

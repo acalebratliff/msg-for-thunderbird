@@ -234,22 +234,8 @@ export async function openMsgFile(api, convert, file, { showNotice, options } = 
   return { tab, warnings, shown };
 }
 
-export const IMPORT_PERMISSIONS = { permissions: ['accountsRead', 'messagesImport'] };
-
-/**
- * Ask for the import permissions (optional in the manifest). Call it straight
- * from a user action, with no await before it, or Thunderbird refuses the
- * request. Resolves true if granted (at once, with no prompt, if already held).
- */
-export function requestImportPermissions(api) {
-  return api.permissions.request(IMPORT_PERMISSIONS);
-}
-
 /** Convert a .msg File and import it into a mail folder. */
 export async function importMsgFile(api, convert, file, folderId, { options } = {}) {
-  if (!(await api.permissions.contains(IMPORT_PERMISSIONS))) {
-    throw new ConversionError(file.name, 'NO_PERMISSION', `"${file.name}" was not imported: the add-on was not allowed to import messages. Choose "Import into folder" again to allow it.`);
-  }
   const { file: eml, warnings } = await convertFile(convert, file, options);
   let header;
   try {
