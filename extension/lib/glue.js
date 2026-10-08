@@ -199,11 +199,37 @@ export async function importMsgFile(api, core, file, folderId, { options } = {})
   return { header, warnings };
 }
 
-/** The single message shown in a tab (the one whose attachment was clicked). */
-export async function displayedMessageId(api, tabId) {
-  const msgs = messagesOf(await api.messageDisplay.getDisplayedMessages(tabId));
-  if (msgs.length !== 1) throw new Error(msgs.length ? 'more than one message is displayed' : 'no message is displayed');
-  return msgs[0].id;
+/**
+ * The message whose attachment was context-clicked. menus.onClicked passes a
+ * tab, but in Thunderbird 140 a message opened in its own tab is reported
+ * with a tab id that getDisplayedMessages() does not know (seen in the
+ * headless smoke test). So: try that tab, then the active tab, and accept a
+ * message only if it really has the clicked attachments (same part name and
+ * file name), so a wrong message can never be used.
+ */
+export async function findClickedMessage(api, tab, attachments) {
+  const candidates = [];
+  const tryList = async (fn) => {
+    try {
+      for (const m of messagesOf(await fn())) if (!candidates.some((c) => c.id === m.id)) candidates.push(m);
+    } catch (e) {
+      // unknown tab id, or nothing displayed
+    }
+  };
+  if (tab && tab.id != null) await tryList(() => api.messageDisplay.getDisplayedMessages(tab.id));
+  if (!candidates.length) await tryList(() => api.messageDisplay.getDisplayedMessages());
+  if (!candidates.length) throw new Error('no message is displayed');
+  for (const m of candidates) {
+    let listed;
+    try {
+      listed = await api.messages.listAttachments(m.id);
+    } catch (e) {
+      continue;
+    }
+    const ok = attachments.every((a) => listed.some((l) => l.partName === a.partName && l.name === a.name));
+    if (ok) return m.id;
+  }
+  throw new Error(candidates.length > 1 ? 'more than one message is displayed' : 'the displayed message does not have that attachment');
 }
 
 /**
@@ -220,7 +246,7 @@ export async function openMsgAttachments(api, core, tab, attachments, { showNoti
   }
   let messageId;
   try {
-    messageId = await displayedMessageId(api, tab && tab.id);
+    messageId = await findClickedMessage(api, tab, atts);
   } catch (e) {
     await notice({ title: 'The attachment could not be opened', lines: [`Thunderbird did not say which message the attachment belongs to (${e.message}).`] });
     return results;

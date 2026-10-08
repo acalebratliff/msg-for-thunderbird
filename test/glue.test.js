@@ -15,16 +15,22 @@ const fxFile = (n, name = n) => new File([fx(n)], name, { type: 'application/vnd
 const text = async (file) => Buffer.from(await file.arrayBuffer()).toString('latin1');
 
 /** A fake messenger API that records what the glue asks of Thunderbird. */
-function fakeApi({ attachments = {}, displayed = [{ id: 7 }], inject = 'shown', importError = null } = {}) {
+function fakeApi({ attachments = {}, displayed = [{ id: 7 }], inject = 'shown', importError = null, listed = null, tabDisplayed = null } = {}) {
   const calls = { open: [], inject: [], import: [], getAttachmentFile: [] };
   let nextTab = 100;
   const api = {
     calls,
     messageDisplay: {
       async open(props) { calls.open.push(props); return { id: nextTab++ }; },
-      async getDisplayedMessages() { return { id: null, messages: displayed }; },
+      async getDisplayedMessages(tabId) {
+        if (tabId !== undefined && tabDisplayed) return tabDisplayed(tabId);
+        return { id: null, messages: displayed };
+      },
     },
     messages: {
+      async listAttachments() {
+        return listed || Object.entries(attachments).map(([partName, f]) => ({ partName, name: f.name }));
+      },
       async getAttachmentFile(messageId, partName) {
         calls.getAttachmentFile.push([messageId, partName]);
         if (!(partName in attachments)) throw new Error(`no part ${partName}`);
@@ -184,8 +190,28 @@ test('attachment path: no .msg selected, or no single displayed message, gives a
   await openMsgAttachments(fakeApi(), core, { id: 3 }, [{ name: 'a.pdf', partName: '1', contentType: 'application/pdf' }], { showNotice: notice });
   assert.match(notice.notices[0].lines[0], /None of the selected attachments/);
   const n2 = noticeRecorder();
-  await openMsgAttachments(fakeApi({ displayed: [{ id: 1 }, { id: 2 }] }), core, { id: 3 }, [{ name: 'a.msg', partName: '1' }], { showNotice: n2 });
+  await openMsgAttachments(fakeApi({ displayed: [{ id: 1 }, { id: 2 }], listed: [] }), core, { id: 3 }, [{ name: 'a.msg', partName: '1' }], { showNotice: n2 });
   assert.match(n2.notices[0].lines[0], /more than one message/);
+  const n3 = noticeRecorder();
+  await openMsgAttachments(fakeApi({ displayed: [] }), core, { id: 3 }, [{ name: 'a.msg', partName: '1' }], { showNotice: n3 });
+  assert.match(n3.notices[0].lines[0], /no message is displayed/);
+});
+
+test('attachment path: a tab id Thunderbird does not know falls back to the active tab, checked by attachment', async () => {
+  const api = fakeApi({
+    attachments: { '1.3': new File([fx('simple.msg')], 'simple.msg') },
+    tabDisplayed: () => { throw new Error('Invalid tab ID: 5'); },
+  });
+  const notice = noticeRecorder();
+  await openMsgAttachments(api, core, { id: 5 }, [{ name: 'simple.msg', partName: '1.3', contentType: 'application/vnd.ms-outlook' }], { showNotice: notice });
+  assert.equal(notice.notices.length, 0);
+  assert.deepEqual(api.calls.getAttachmentFile, [[7, '1.3']]);
+  // The active message lacks the clicked attachment: refuse rather than guess.
+  const wrong = fakeApi({ attachments: { '1.3': new File([fx('simple.msg')], 'simple.msg') }, listed: [{ partName: '1.3', name: 'other.msg' }] });
+  const n2 = noticeRecorder();
+  await openMsgAttachments(wrong, core, { id: 5 }, [{ name: 'simple.msg', partName: '1.3' }], { showNotice: n2 });
+  assert.equal(wrong.calls.getAttachmentFile.length, 0);
+  assert.match(n2.notices[0].lines[0], /does not have that attachment/);
 });
 
 test('nested path: a .msg attached inside a converted message opens the same way', async () => {
