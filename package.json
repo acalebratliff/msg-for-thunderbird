@@ -1,0 +1,17 @@
+{
+  "name": "msg-for-thunderbird",
+  "version": "0.1.0",
+  "description": "Thunderbird add-on that opens Outlook .msg files. Converts locally with msg-eml-core; no network access.",
+  "license": "Apache-2.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "vendor": "node scripts/vendor-core.mjs",
+    "build": "node scripts/build.mjs",
+    "lint": "node scripts/build.mjs --lint",
+    "test": "node --test \"test/*.test.js\""
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
