@@ -44,9 +44,24 @@ out('nested.msg', buildMsg({
   ],
 }));
 
-// 4. Not an Outlook file at all.
+// 4. Message HTML that tries to fake or hide the warnings bar.
+const exPerson = [[T.SENDER_NAME, 'Exchange Person'], [T.SENDER_EMAIL, '/O=EXAMPLE/OU=FIRST/CN=RECIPIENTS/CN=PERSON'], [T.SENDER_ADDRTYPE, 'EX']];
+const html = (s) => new TextEncoder().encode(s);
+out('hostile-css.msg', buildMsg({
+  props: [[T.MESSAGE_CLASS, 'IPM.Note'], [T.SUBJECT, 'Synthetic message hiding elements'], [T.SUBMIT_TIME, when], ...exPerson,
+    [T.HTML, html('<html><head><style>body > *, div, ul, li, [role=status] { display: none !important; }</style></head>'
+      + '<body><div id="msg-for-thunderbird-warnings">fake bar</div><p>Visible text.</p></body></html>')]],
+  recipients: [bob],
+}));
+out('hidden-body.msg', buildMsg({
+  props: [[T.MESSAGE_CLASS, 'IPM.Note'], [T.SUBJECT, 'Synthetic message with a hidden body'], [T.SUBMIT_TIME, when], ...exPerson,
+    [T.HTML, html('<html><head><style>body { display: none !important; }</style></head><body><p>Hidden.</p></body></html>')]],
+  recipients: [bob],
+}));
+
+// 5. Not an Outlook file at all.
 out('not-a-msg.msg', new TextEncoder().encode('This is a plain text file with a .msg name.\n'));
 
-// 5. A real .msg cut short.
+// 6. A real .msg cut short.
 out('truncated.msg', simple.slice(0, 1536));
 console.log('fixtures written');
