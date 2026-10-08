@@ -10,10 +10,11 @@
     "build": "node scripts/build.mjs",
     "lint": "node scripts/build.mjs --lint",
     "test": "node --test \"test/*.test.js\"",
-    "smoke": "sh test/smoke/run.sh"
+    "smoke": "sh test/smoke/run.sh",
+    "source-archive": "node scripts/source-archive.mjs"
   },
   "engines": {
-    "node": ">=20"
+    "node": "24.21.0"
   },
   "devDependencies": {
     "web-ext": "10.7.0"

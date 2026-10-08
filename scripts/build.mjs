@@ -12,6 +12,10 @@ import { fileURLToPath } from 'node:url';
 import { makeZip } from './zip.mjs';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
+const wantNode = readFileSync(join(root, '.nvmrc'), 'utf8').trim();
+if (process.versions.node !== wantNode) {
+  console.warn(`warning: Node ${process.versions.node}; the recorded XPI hash was made with Node ${wantNode} (.nvmrc). Another version's zlib can give different bytes.`);
+}
 const stage = join(root, 'build', 'stage');
 const sha256 = (buf) => createHash('sha256').update(buf).digest('hex');
 
@@ -67,7 +71,7 @@ writeFileSync(join(outDir, name), zip);
 const hash = sha256(zip);
 writeFileSync(join(outDir, `${name}.sha256`), `${hash}  ${name}\n`);
 console.log(`${relative(root, join(outDir, name))}: ${zip.length} bytes, ${entries.length} files`);
-console.log(`sha256 ${hash}`);
+console.log(`sha256 ${hash} (Node ${process.versions.node})`);
 
 if (process.argv.includes('--lint')) {
   const bin = join(root, 'node_modules', '.bin', 'web-ext');
