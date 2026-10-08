@@ -1,0 +1,18 @@
+:root { color-scheme: light dark; --fg: #1f1f1f; --bg: #fafafa; --muted: #5c5c5c; --line: #c8c8c8; --ok: #146c2e; --err: #b3261e; --warnbg: #fff4ce; --warnfg: #1f1f1f; }
+@media (prefers-color-scheme: dark) { :root { --fg: #ececec; --bg: #1c1b22; --muted: #b0b0b0; --line: #4a4a52; --ok: #7bd88f; --err: #ff8a80; --warnbg: #4a3f00; --warnfg: #fff4ce; } }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.5 system-ui, sans-serif; }
+main { max-width: 720px; margin: 0 auto; padding: 24px 16px; }
+h1 { font-size: 20px; margin: 0 0 4px; }
+.lead { color: var(--muted); margin: 0 0 16px; }
+fieldset { border: 1px solid var(--line); border-radius: 6px; margin: 0 0 16px; padding: 8px 12px; }
+fieldset label { display: block; margin: 4px 0; }
+select { margin-left: 24px; max-width: calc(100% - 24px); }
+.drop { border: 2px dashed var(--line); border-radius: 8px; padding: 24px; text-align: center; }
+.drop.over { border-color: var(--ok); }
+.drop p { margin: 0 0 8px; }
+#results { padding-left: 20px; }
+#results li { margin: 8px 0; }
+.status-ok { color: var(--ok); }
+.status-err { color: var(--err); }
+.warn { background: var(--warnbg); color: var(--warnfg); border-radius: 4px; padding: 4px 8px; margin-top: 4px; }
+.warn ul { margin: 2px 0 0; padding-left: 18px; }

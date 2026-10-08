@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>MSG Opener for Thunderbird</title>
+<link rel="stylesheet" href="open.css">
+<script type="module" src="open.js"></script>
+</head>
+<body>
+<main>
+  <h1>MSG Opener for Thunderbird</h1>
+  <p class="lead">Open Outlook .msg files. They are converted on this computer; nothing is sent anywhere.</p>
+
+  <fieldset>
+    <legend>What to do with each file</legend>
+    <label><input type="radio" name="mode" value="open" checked> Open it in a message tab</label>
+    <label><input type="radio" name="mode" value="import"> Import into folder:</label>
+    <select id="folder" disabled aria-label="Folder to import into"></select>
+  </fieldset>
+
+  <div id="drop" class="drop" tabindex="0">
+    <p>Drop .msg files here, or</p>
+    <button type="button" id="choose">Choose files…</button>
+    <input type="file" id="picker" multiple accept=".msg,application/vnd.ms-outlook" hidden>
+  </div>
+
+  <ol id="results" aria-live="polite"></ol>
+</main>
+</body>
+</html>

@@ -1,0 +1,39 @@
+{
+  "manifest_version": 3,
+  "name": "MSG Opener for Thunderbird",
+  "version": "0.1.0",
+  "description": "Opens Outlook .msg email files in Thunderbird. The conversion runs on your computer; nothing is sent anywhere.",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "msg-opener@mendworks.dev",
+      "strict_min_version": "140.0",
+      "data_collection_permissions": {
+        "required": [
+          "none"
+        ]
+      }
+    }
+  },
+  "background": {
+    "scripts": [
+      "background.js"
+    ],
+    "type": "module"
+  },
+  "action": {
+    "default_title": "Open .msg files",
+    "default_label": "Open .msg",
+    "default_icon": "icons/icon.svg"
+  },
+  "icons": {
+    "32": "icons/icon.svg",
+    "64": "icons/icon.svg"
+  },
+  "permissions": [
+    "messagesRead",
+    "menus",
+    "scripting",
+    "accountsRead",
+    "messagesImport"
+  ]
+}
