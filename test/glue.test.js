@@ -8,7 +8,7 @@ import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import * as core from '../core/msg-eml-core.js';
 import {
-  isMsgAttachment, emlName, convertMsg, convertMsgBytes, convertFile, collectWarnings, ConversionError,
+  isMsgAttachment, emlName, menuStateFor, ensureMessageId, hasMessageId, convertMsg, convertMsgBytes, convertFile, collectWarnings, ConversionError,
   openMsgFile, importMsgFile, openMsgAttachments, showWarnings, messagesOf, inThreadConverter,
   MAX_MSG_BYTES,
 } from '../extension/lib/glue.js';
@@ -138,7 +138,8 @@ test('warnings are shown once as a bar in the opened tab', async () => {
   const inj = api.calls.inject[0];
   assert.equal(inj.target.tabId, 100);
   assert.equal(typeof inj.func, 'function');
-  assert.match(inj.args[0], /^Converted from "warnings.msg"\. 2 things could not be carried over exactly:$/);
+  assert.match(inj.args[0], /^Converted from "warnings.msg"\. 3 things could not be carried over exactly:$/);
+  assert.match(inj.args[1][2], /no Message-ID; one was made from the file's content \(<[0-9a-f]{32}@msg-opener\.invalid>\)/);
   assert.deepEqual(inj.args[1], r.warnings);
   assert.equal(notice.notices.length, 0);
 });
@@ -308,14 +309,45 @@ test('the worker converts and reports errors in the same shape', async () => {
   globalThis.self = { postMessage: (m) => posted.push(m) };
   await import('../build/stage/lib/convert-worker.js');
   const buf = fx('warnings.msg').buffer.slice(0);
-  self.onmessage({ data: { buf, fileName: 'warnings.msg', options: {} } });
+  await self.onmessage({ data: { buf, fileName: 'warnings.msg', options: {} } });
   assert.equal(posted[0].ok, true);
   assert.equal(posted[0].name, 'warnings.eml');
   assert.ok(posted[0].eml instanceof ArrayBuffer);
   assert.match(Buffer.from(posted[0].eml).toString('latin1'), /^Subject: Synthetic message with warnings$/m);
-  assert.equal(posted[0].warnings.length, 2);
-  self.onmessage({ data: { buf: fx('not-a-msg.msg').buffer.slice(0), fileName: 'n.msg', options: {} } });
+  assert.equal(posted[0].warnings.length, 3);
+  assert.match(Buffer.from(posted[0].eml).toString('latin1'), /^Message-ID: <[0-9a-f]{32}@msg-opener\.invalid>\r\n/);
+  await self.onmessage({ data: { buf: fx('not-a-msg.msg').buffer.slice(0), fileName: 'n.msg', options: {} } });
   assert.deepEqual(posted[1], { ok: false, error: { code: 'NOT_MSG', fileName: 'n.msg', message: posted[1].error.message } });
   assert.match(posted[1].error.message, /is not an Outlook message/);
   delete globalThis.self;
+});
+
+test('menu state: decided from the contexts and always explicit, so .msg -> other -> .msg shows it again', () => {
+  const ctx = (atts) => ({ contexts: ['message_attachments'], menuIds: [], attachments: atts });
+  const msg = [{ name: 'a.msg', contentType: 'application/vnd.ms-outlook' }];
+  const pdf = [{ name: 'a.pdf', contentType: 'application/pdf' }];
+  assert.deepEqual(menuStateFor(ctx(msg)), { visible: true, title: 'Open as message' });
+  assert.deepEqual(menuStateFor(ctx(pdf)), { visible: false, title: 'Open as message' });
+  // Thunderbird omits a hidden item from menuIds; the state must not depend on it.
+  assert.deepEqual(menuStateFor(ctx(msg)), { visible: true, title: 'Open as message' });
+  assert.equal(menuStateFor({ contexts: ['all_message_attachments'], attachments: [...msg, ...msg] }).title, 'Open 2 .msg attachments as messages');
+  assert.equal(menuStateFor({ contexts: ['message_list'], attachments: msg }), null);
+  assert.equal(menuStateFor({}), null);
+});
+
+test('a converted message gets a stable Message-ID from the file content only when it has none', async () => {
+  const noId = fx('warnings.msg');
+  const a = await ensureMessageId(convertMsgBytes(core, noId, 'w.msg'), noId);
+  const b = await ensureMessageId(convertMsgBytes(core, noId, 'w.msg'), noId);
+  const id = /^Message-ID: (<[0-9a-f]{32}@msg-opener\.invalid>)\r\n/.exec(Buffer.from(a.eml).toString('latin1'));
+  assert.ok(id);
+  assert.deepEqual(Buffer.from(a.eml), Buffer.from(b.eml), 'same file, same id');
+  assert.ok(hasMessageId(a.eml));
+  const withId = fx('simple.msg');
+  const c = await ensureMessageId(convertMsgBytes(core, withId, 's.msg'), withId);
+  assert.match(Buffer.from(c.eml).toString('latin1'), /^Message-ID: <simple\.fixture@example\.com>$/m);
+  assert.ok(!/msg-opener\.invalid/.test(Buffer.from(c.eml).toString('latin1')));
+  assert.equal(c.warnings.length, 0);
+  const other = await ensureMessageId(convertMsgBytes(core, fx('hostile-css.msg'), 'h.msg'), fx('hostile-css.msg'));
+  assert.notEqual(/Message-ID: (\S+)/.exec(Buffer.from(other.eml).toString('latin1'))[1], id[1]);
 });

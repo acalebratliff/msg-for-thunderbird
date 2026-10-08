@@ -17,6 +17,19 @@ export function isMsgAttachment(att) {
   return name.endsWith('.msg') || MSG_TYPES.has(type);
 }
 
+export const ATTACHMENT_CONTEXTS = ['message_attachments', 'all_message_attachments'];
+
+/**
+ * The menu entry's state for a menus.onShown info, or null when the menu is
+ * not an attachment menu. Always returns visible true or false explicitly.
+ */
+export function menuStateFor(info) {
+  const contexts = (info && info.contexts) || [];
+  if (!contexts.some((c) => ATTACHMENT_CONTEXTS.includes(c))) return null;
+  const n = ((info && info.attachments) || []).filter(isMsgAttachment).length;
+  return { visible: n > 0, title: n > 1 ? `Open ${n} .msg attachments as messages` : 'Open as message' };
+}
+
 /** File name for the converted message: "Report.msg" -> "Report.eml". */
 export function emlName(msgName) {
   const base = String(msgName || '').trim().replace(/\.msg$/i, '').replace(/[\\/]/g, '_');
@@ -98,12 +111,40 @@ export function convertMsg(core, bytes, fileName, options = {}) {
   return { file: new File([r.eml], r.name, { type: EML_TYPE }), warnings: r.warnings, report: r.report };
 }
 
+/** True if the .eml's header block has a Message-ID. */
+export function hasMessageId(eml) {
+  const head = new TextDecoder('latin1').decode(eml.subarray(0, Math.min(eml.length, 65536)));
+  const end = head.indexOf('\r\n\r\n');
+  return /(^|\r\n)Message-ID:/i.test(end >= 0 ? head.slice(0, end) : head);
+}
+
+/**
+ * Give a converted message with no Message-ID a stable one made from the
+ * SHA-256 of the .msg file, so importing the same file twice is detected.
+ * r: the result of convertMsgBytes; msgBytes: the .msg file. Async (WebCrypto).
+ */
+export async function ensureMessageId(r, msgBytes) {
+  if (hasMessageId(r.eml)) return r;
+  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', msgBytes));
+  const hex = [...digest.slice(0, 16)].map((b) => b.toString(16).padStart(2, '0')).join('');
+  const id = `<${hex}@msg-opener.invalid>`;
+  const line = new TextEncoder().encode(`Message-ID: ${id}\r\n`);
+  const eml = new Uint8Array(line.length + r.eml.length);
+  eml.set(line, 0);
+  eml.set(r.eml, line.length);
+  return { ...r, eml, warnings: [...r.warnings, `the file has no Message-ID; one was made from the file's content (${id}), so importing the same file twice is detected`] };
+}
+
 /**
  * A converter is an async function (ArrayBuffer, fileName, options) ->
  * {file, warnings}. This one runs in the calling thread (tests, fallback).
  */
 export function inThreadConverter(core) {
-  return async (buf, fileName, options) => convertMsg(core, buf, fileName, options);
+  return async (buf, fileName, options) => {
+    const bytes = new Uint8Array(buf);
+    const r = await ensureMessageId(convertMsgBytes(core, bytes, fileName, options), bytes);
+    return { file: new File([r.eml], r.name, { type: EML_TYPE }), warnings: r.warnings, report: r.report };
+  };
 }
 
 /** Read a File / Blob (from a picker, a drop or getAttachmentFile) and convert it. */
