@@ -4,19 +4,24 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import * as core from '../core/msg-eml-core.js';
 import {
-  isMsgAttachment, emlName, convertMsg, convertFile, collectWarnings, ConversionError,
-  openMsgFile, importMsgFile, openMsgAttachments, showWarnings, messagesOf,
+  isMsgAttachment, emlName, convertMsg, convertMsgBytes, convertFile, collectWarnings, ConversionError,
+  openMsgFile, importMsgFile, openMsgAttachments, showWarnings, messagesOf, inThreadConverter,
+  requestImportPermissions, IMPORT_PERMISSIONS, MAX_MSG_BYTES,
 } from '../extension/lib/glue.js';
+
+const convert = inThreadConverter(core);
 
 const fx = (n) => new Uint8Array(readFileSync(new URL(`./fixtures/${n}`, import.meta.url)));
 const fxFile = (n, name = n) => new File([fx(n)], name, { type: 'application/vnd.ms-outlook' });
 const text = async (file) => Buffer.from(await file.arrayBuffer()).toString('latin1');
 
 /** A fake messenger API that records what the glue asks of Thunderbird. */
-function fakeApi({ attachments = {}, displayed = [{ id: 7 }], inject = 'shown', importError = null, listed = null, tabDisplayed = null } = {}) {
-  const calls = { open: [], inject: [], import: [], getAttachmentFile: [] };
+function fakeApi({ attachments = {}, displayed = [{ id: 7 }], inject = 'shown', importError = null, listed = null, tabDisplayed = null, granted = true } = {}) {
+  const calls = { open: [], inject: [], import: [], getAttachmentFile: [], request: [] };
   let nextTab = 100;
   const api = {
     calls,
@@ -29,7 +34,7 @@ function fakeApi({ attachments = {}, displayed = [{ id: 7 }], inject = 'shown', 
     },
     messages: {
       async listAttachments() {
-        return listed || Object.entries(attachments).map(([partName, f]) => ({ partName, name: f.name }));
+        return listed || Object.entries(attachments).map(([partName, f]) => ({ partName, name: f.name, size: f.size }));
       },
       async getAttachmentFile(messageId, partName) {
         calls.getAttachmentFile.push([messageId, partName]);
@@ -41,6 +46,10 @@ function fakeApi({ attachments = {}, displayed = [{ id: 7 }], inject = 'shown', 
         if (importError) throw new Error(importError);
         return { id: 55, subject: 'x' };
       },
+    },
+    permissions: {
+      async contains(p) { return granted && JSON.stringify(p) === JSON.stringify(IMPORT_PERMISSIONS); },
+      async request(p) { calls.request.push(p); return granted; },
     },
     scripting: {
       async executeScript(inj) {
@@ -115,10 +124,11 @@ test('bad input gives an honest ConversionError, never an empty message', async 
 
 test('disk path: a picked file opens with messageDisplay.open and no bar when clean', async () => {
   const api = fakeApi();
-  const r = await openMsgFile(api, core, fxFile('simple.msg'));
+  const r = await openMsgFile(api, convert, fxFile('simple.msg'));
   assert.equal(api.calls.open.length, 1);
   assert.equal(api.calls.open[0].file.name, 'simple.eml');
   assert.equal(api.calls.open[0].active, true);
+  assert.equal(api.calls.open[0].location, 'tab', 'always a new tab, whatever the open-messages setting');
   assert.equal(r.shown, 'none');
   assert.equal(api.calls.inject.length, 0);
 });
@@ -126,7 +136,7 @@ test('disk path: a picked file opens with messageDisplay.open and no bar when cl
 test('warnings are shown once as a bar in the opened tab', async () => {
   const api = fakeApi();
   const notice = noticeRecorder();
-  const r = await openMsgFile(api, core, fxFile('warnings.msg'), { showNotice: notice });
+  const r = await openMsgFile(api, convert, fxFile('warnings.msg'), { showNotice: notice });
   assert.equal(r.shown, 'bar');
   assert.equal(api.calls.inject.length, 1);
   const inj = api.calls.inject[0];
@@ -138,10 +148,10 @@ test('warnings are shown once as a bar in the opened tab', async () => {
 });
 
 test('if the bar cannot be placed, the warnings go to a notice instead of being dropped', async () => {
-  for (const mode of ['throw', 'nothing']) {
+  for (const mode of ['throw', 'nothing', 'hidden', 'present']) {
     const api = fakeApi({ inject: mode });
     const notice = noticeRecorder();
-    const r = await openMsgFile(api, core, fxFile('warnings.msg'), { showNotice: notice });
+    const r = await openMsgFile(api, convert, fxFile('warnings.msg'), { showNotice: notice });
     assert.equal(r.shown, 'notice');
     assert.equal(notice.notices.length, 1);
     assert.deepEqual(notice.notices[0].lines, r.warnings);
@@ -157,7 +167,7 @@ test('if the bar cannot be placed, the warnings go to a notice instead of being 
 test('attachment path: getAttachmentFile -> convert -> open, only for .msg attachments', async () => {
   const api = fakeApi({ attachments: { '1.2': new File([fx('simple.msg')], 'simple.msg') } });
   const notice = noticeRecorder();
-  const res = await openMsgAttachments(api, core, { id: 3 }, [
+  const res = await openMsgAttachments(api, convert, { id: 3 }, [
     { name: 'simple.msg', partName: '1.2', contentType: 'application/octet-stream' },
     { name: 'photo.jpg', partName: '1.3', contentType: 'image/jpeg' },
   ], { showNotice: notice });
@@ -174,7 +184,7 @@ test('attachment path: one bad attachment is reported and the others still open'
     '1.3': new File([fx('simple.msg')], 'good.msg'),
   } });
   const notice = noticeRecorder();
-  const res = await openMsgAttachments(api, core, { id: 3 }, [
+  const res = await openMsgAttachments(api, convert, { id: 3 }, [
     { name: 'bad.msg', partName: '1.2', contentType: 'application/octet-stream' },
     { name: 'good.msg', partName: '1.3', contentType: 'application/vnd.ms-outlook' },
   ], { showNotice: notice });
@@ -187,13 +197,13 @@ test('attachment path: one bad attachment is reported and the others still open'
 
 test('attachment path: no .msg selected, or no single displayed message, gives a notice', async () => {
   const notice = noticeRecorder();
-  await openMsgAttachments(fakeApi(), core, { id: 3 }, [{ name: 'a.pdf', partName: '1', contentType: 'application/pdf' }], { showNotice: notice });
+  await openMsgAttachments(fakeApi(), convert, { id: 3 }, [{ name: 'a.pdf', partName: '1', contentType: 'application/pdf' }], { showNotice: notice });
   assert.match(notice.notices[0].lines[0], /None of the selected attachments/);
   const n2 = noticeRecorder();
-  await openMsgAttachments(fakeApi({ displayed: [{ id: 1 }, { id: 2 }], listed: [] }), core, { id: 3 }, [{ name: 'a.msg', partName: '1' }], { showNotice: n2 });
+  await openMsgAttachments(fakeApi({ displayed: [{ id: 1 }, { id: 2 }], listed: [] }), convert, { id: 3 }, [{ name: 'a.msg', partName: '1' }], { showNotice: n2 });
   assert.match(n2.notices[0].lines[0], /more than one message/);
   const n3 = noticeRecorder();
-  await openMsgAttachments(fakeApi({ displayed: [] }), core, { id: 3 }, [{ name: 'a.msg', partName: '1' }], { showNotice: n3 });
+  await openMsgAttachments(fakeApi({ displayed: [] }), convert, { id: 3 }, [{ name: 'a.msg', partName: '1' }], { showNotice: n3 });
   assert.match(n3.notices[0].lines[0], /no message is displayed/);
 });
 
@@ -203,13 +213,13 @@ test('attachment path: a tab id Thunderbird does not know falls back to the acti
     tabDisplayed: () => { throw new Error('Invalid tab ID: 5'); },
   });
   const notice = noticeRecorder();
-  await openMsgAttachments(api, core, { id: 5 }, [{ name: 'simple.msg', partName: '1.3', contentType: 'application/vnd.ms-outlook' }], { showNotice: notice });
+  await openMsgAttachments(api, convert, { id: 5 }, [{ name: 'simple.msg', partName: '1.3', contentType: 'application/vnd.ms-outlook' }], { showNotice: notice });
   assert.equal(notice.notices.length, 0);
   assert.deepEqual(api.calls.getAttachmentFile, [[7, '1.3']]);
   // The active message lacks the clicked attachment: refuse rather than guess.
   const wrong = fakeApi({ attachments: { '1.3': new File([fx('simple.msg')], 'simple.msg') }, listed: [{ partName: '1.3', name: 'other.msg' }] });
   const n2 = noticeRecorder();
-  await openMsgAttachments(wrong, core, { id: 5 }, [{ name: 'simple.msg', partName: '1.3' }], { showNotice: n2 });
+  await openMsgAttachments(wrong, convert, { id: 5 }, [{ name: 'simple.msg', partName: '1.3' }], { showNotice: n2 });
   assert.equal(wrong.calls.getAttachmentFile.length, 0);
   assert.match(n2.notices[0].lines[0], /does not have that attachment/);
 });
@@ -223,14 +233,14 @@ test('nested path: a .msg attached inside a converted message opens the same way
   const inner = Buffer.from(m[1].replace(/\r\n/g, ''), 'base64');
   assert.deepEqual(new Uint8Array(inner), fx('simple.msg'));
   const api = fakeApi({ attachments: { '1.3': new File([inner], 'attached copy.msg') } });
-  await openMsgAttachments(api, core, { id: 9 }, [{ name: 'attached copy.msg', partName: '1.3', contentType: 'application/vnd.ms-outlook' }]);
+  await openMsgAttachments(api, convert, { id: 9 }, [{ name: 'attached copy.msg', partName: '1.3', contentType: 'application/vnd.ms-outlook' }]);
   assert.equal(api.calls.open[0].file.name, 'attached copy.eml');
   assert.match(await text(api.calls.open[0].file), /^Subject: Synthetic plain message$/m);
 });
 
 test('import path: messages.import gets the .eml and the folder', async () => {
   const api = fakeApi();
-  const r = await importMsgFile(api, core, fxFile('warnings.msg'), 'folder-1');
+  const r = await importMsgFile(api, convert, fxFile('warnings.msg'), 'folder-1');
   assert.equal(api.calls.import[0][0].name, 'warnings.eml');
   assert.equal(api.calls.import[0][1], 'folder-1');
   assert.equal(r.header.id, 55);
@@ -239,14 +249,87 @@ test('import path: messages.import gets the .eml and the folder', async () => {
 
 test('import path: a duplicate Message-ID and other failures are worded plainly', async () => {
   const dup = fakeApi({ importError: 'Destination folder already contains a message with id <simple.fixture@example.com>' });
-  await assert.rejects(importMsgFile(dup, core, fxFile('simple.msg'), 'f'), (e) => e.code === 'DUPLICATE' && /same Message-ID/.test(e.message));
+  await assert.rejects(importMsgFile(dup, convert, fxFile('simple.msg'), 'f'), (e) => e.code === 'DUPLICATE' && /same Message-ID/.test(e.message));
   const other = fakeApi({ importError: 'Folder is read-only' });
-  await assert.rejects(importMsgFile(other, core, fxFile('simple.msg'), 'f'), (e) => e.code === 'IMPORT_FAILED' && /converted but could not be imported: Folder is read-only/.test(e.message));
-  await assert.rejects(importMsgFile(fakeApi(), core, fxFile('truncated.msg'), 'f'), ConversionError);
+  await assert.rejects(importMsgFile(other, convert, fxFile('simple.msg'), 'f'), (e) => e.code === 'IMPORT_FAILED' && /converted but could not be imported: Folder is read-only/.test(e.message));
+  await assert.rejects(importMsgFile(fakeApi(), convert, fxFile('truncated.msg'), 'f'), ConversionError);
 });
 
 test('messagesOf accepts a MessageList or an array', () => {
   assert.deepEqual(messagesOf({ messages: [1] }), [1]);
   assert.deepEqual(messagesOf([2]), [2]);
   assert.deepEqual(messagesOf(null), []);
+});
+
+test('files over the size cap are refused before they are read', async () => {
+  const big = { name: 'huge.msg', size: MAX_MSG_BYTES + 1, arrayBuffer: async () => { throw new Error('must not be read'); } };
+  await assert.rejects(convertFile(convert, big), (e) => e.code === 'TOO_LARGE' && /"huge.msg" is 25\.0 MB, larger than the 25 MB this add-on opens; it was not opened\./.test(e.message));
+  assert.throws(() => convertMsgBytes(core, new Uint8Array(MAX_MSG_BYTES + 1), 'x.msg'), (e) => e.code === 'TOO_LARGE');
+  const api = fakeApi({ attachments: { '1.2': new File([fx('simple.msg')], 'big.msg') }, listed: [{ partName: '1.2', name: 'big.msg', size: MAX_MSG_BYTES + 5 }] });
+  const notice = noticeRecorder();
+  await openMsgAttachments(api, convert, { id: 3 }, [{ name: 'big.msg', partName: '1.2', size: MAX_MSG_BYTES + 5 }], { showNotice: notice });
+  assert.equal(api.calls.getAttachmentFile.length, 0);
+  assert.match(notice.notices[0].lines[0], /larger than the 25 MB/);
+});
+
+test('attachment path: a large attachment shows "Converting…" and closes it when opened', async () => {
+  const f = new File([fx('simple.msg')], 'mid.msg');
+  const api = fakeApi({ attachments: { '1.2': f }, listed: [{ partName: '1.2', name: 'mid.msg', size: 2 * 1024 * 1024 }] });
+  const events = [];
+  const progress = async (name) => { events.push(`start ${name}`); return { done: async () => { events.push('done'); } }; };
+  await openMsgAttachments(api, convert, { id: 3 }, [{ name: 'mid.msg', partName: '1.2', size: 2 * 1024 * 1024 }], { progress });
+  assert.deepEqual(events, ['start mid.msg', 'done']);
+  assert.equal(api.calls.open[0].location, 'tab');
+  const small = fakeApi({ attachments: { '1.2': f } });
+  const ev2 = [];
+  await openMsgAttachments(small, convert, { id: 3 }, [{ name: 'mid.msg', partName: '1.2', size: f.size }], { progress: async () => { ev2.push('start'); return { done: async () => {} }; } });
+  assert.deepEqual(ev2, [], 'no flash of a window for a small file');
+  // a failing conversion still closes the progress window
+  const bad = fakeApi({ attachments: { '1.2': new File([fx('truncated.msg')], 'bad.msg') }, listed: [{ partName: '1.2', name: 'bad.msg', size: 3e6 }] });
+  const ev3 = [];
+  await openMsgAttachments(bad, convert, { id: 3 }, [{ name: 'bad.msg', partName: '1.2', size: 3e6 }],
+    { showNotice: async () => ev3.push('notice'), progress: async () => { ev3.push('start'); return { done: async () => ev3.push('done') }; } });
+  assert.deepEqual(ev3, ['start', 'done', 'notice']);
+});
+
+test('fallback match also checks size and refuses two matching messages', async () => {
+  const f = new File([fx('simple.msg')], 'simple.msg');
+  const api = fakeApi({ attachments: { '1.3': f }, listed: [{ partName: '1.3', name: 'simple.msg', size: 999 }] });
+  const n = noticeRecorder();
+  await openMsgAttachments(api, convert, { id: 5 }, [{ name: 'simple.msg', partName: '1.3', size: f.size }], { showNotice: n });
+  assert.equal(api.calls.getAttachmentFile.length, 0);
+  const two = fakeApi({ attachments: { '1.3': f }, displayed: [{ id: 1 }, { id: 2 }] });
+  const n2 = noticeRecorder();
+  await openMsgAttachments(two, convert, { id: 5 }, [{ name: 'simple.msg', partName: '1.3', size: f.size }], { showNotice: n2 });
+  assert.equal(two.calls.getAttachmentFile.length, 0);
+  assert.match(n2.notices[0].lines[0], /more than one displayed message has that attachment/);
+});
+
+test('import needs the optional permissions; asking goes straight to permissions.request', async () => {
+  const no = fakeApi({ granted: false });
+  await assert.rejects(importMsgFile(no, convert, fxFile('simple.msg'), 'f'), (e) => e.code === 'NO_PERMISSION' && /not allowed to import/.test(e.message));
+  assert.equal(no.calls.import.length, 0);
+  assert.equal(await requestImportPermissions(no), false);
+  assert.deepEqual(no.calls.request, [IMPORT_PERMISSIONS]);
+  const yes = fakeApi();
+  assert.equal(await requestImportPermissions(yes), true);
+});
+
+test('the worker converts and reports errors in the same shape', async () => {
+  const posted = [];
+  // The worker imports ../core/ as laid out in the XPI, so load it from the staged build.
+  execFileSync(process.execPath, [fileURLToPath(new URL('../scripts/build.mjs', import.meta.url))], { stdio: 'ignore' });
+  globalThis.self = { postMessage: (m) => posted.push(m) };
+  await import('../build/stage/lib/convert-worker.js');
+  const buf = fx('warnings.msg').buffer.slice(0);
+  self.onmessage({ data: { buf, fileName: 'warnings.msg', options: {} } });
+  assert.equal(posted[0].ok, true);
+  assert.equal(posted[0].name, 'warnings.eml');
+  assert.ok(posted[0].eml instanceof ArrayBuffer);
+  assert.match(Buffer.from(posted[0].eml).toString('latin1'), /^Subject: Synthetic message with warnings$/m);
+  assert.equal(posted[0].warnings.length, 2);
+  self.onmessage({ data: { buf: fx('not-a-msg.msg').buffer.slice(0), fileName: 'n.msg', options: {} } });
+  assert.deepEqual(posted[1], { ok: false, error: { code: 'NOT_MSG', fileName: 'n.msg', message: posted[1].error.message } });
+  assert.match(posted[1].error.message, /is not an Outlook message/);
+  delete globalThis.self;
 });

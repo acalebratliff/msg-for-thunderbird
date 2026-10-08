@@ -1,8 +1,8 @@
-// The add-on's glue: the one conversion function (the boundary another
-// add-on, such as LookOut, could take together with the core) and the flows
-// around it. Nothing here touches globals: the core module and the messenger
-// API are passed in, so the same code runs in Thunderbird and under node:test
-// with fakes.
+// The add-on's glue: the conversion boundary (convertMsgBytes / convertMsg,
+// which another add-on such as LookOut could take together with the core) and
+// the flows around it. Nothing here touches globals except File: the core (or
+// a converter function) and the messenger API are passed in, so the same code
+// runs in Thunderbird and under node:test with fakes.
 
 export const EML_TYPE = 'message/rfc822';
 const MSG_TYPES = new Set(['application/vnd.ms-outlook', 'application/x-msg', 'application/msoutlook']);
@@ -36,6 +36,20 @@ export class ConversionError extends Error {
 
 const NOT_MSG_HINT = 'Only Outlook .msg files can be opened this way.';
 
+/** Largest .msg this add-on converts. Conversion needs several times the file size in memory. */
+export const MAX_MSG_BYTES = 25 * 1024 * 1024;
+/** Attachments at least this big get a "Converting…" notice. */
+export const PROGRESS_MIN_BYTES = 1024 * 1024;
+const mb = (n) => `${(n / (1024 * 1024)).toFixed(1)} MB`;
+
+/** Throw a ConversionError if a file of `size` bytes is over the cap. */
+export function checkSize(fileName, size) {
+  if (typeof size === 'number' && size > MAX_MSG_BYTES) {
+    throw new ConversionError(fileName, 'TOO_LARGE',
+      `"${fileName}" is ${mb(size)}, larger than the ${MAX_MSG_BYTES / (1024 * 1024)} MB this add-on opens; it was not opened.`);
+  }
+}
+
 function userMessage(fileName, e) {
   const name = fileName ? `"${fileName}"` : 'The file';
   const detail = e && typeof e.message === 'string' && e.message ? e.message : String(e);
@@ -61,30 +75,48 @@ export function collectWarnings(report, prefix = '') {
 
 /**
  * The conversion boundary. bytes: Uint8Array or ArrayBuffer of a .msg file.
- * Returns the .eml as a File plus the warnings to show; throws ConversionError.
+ * Returns the .eml bytes and file name plus the warnings to show; throws
+ * ConversionError. Synchronous: in Thunderbird it runs in a Worker
+ * (lib/convert-worker.js); a LookOut module can call it the same way.
  */
-export function convertMsg(core, bytes, fileName, options = {}) {
+export function convertMsgBytes(core, bytes, fileName, options = {}) {
   const u8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes || 0);
   if (u8.length === 0) throw new ConversionError(fileName, 'BAD_INPUT', userMessage(fileName, { code: 'BAD_INPUT' }));
+  checkSize(fileName, u8.length);
   let out;
   try {
     out = core.convertMsgToEml(u8, options);
   } catch (e) {
     throw new ConversionError(fileName, (e && e.code) || 'UNEXPECTED', userMessage(fileName, e), e);
   }
-  const file = new File([out.eml], emlName(fileName), { type: EML_TYPE });
-  return { file, warnings: collectWarnings(out.report), report: out.report };
+  return { eml: out.eml, name: emlName(fileName), warnings: collectWarnings(out.report), report: out.report };
+}
+
+/** convertMsgBytes, with the .eml wrapped in a File ready for messageDisplay.open / messages.import. */
+export function convertMsg(core, bytes, fileName, options = {}) {
+  const r = convertMsgBytes(core, bytes, fileName, options);
+  return { file: new File([r.eml], r.name, { type: EML_TYPE }), warnings: r.warnings, report: r.report };
+}
+
+/**
+ * A converter is an async function (ArrayBuffer, fileName, options) ->
+ * {file, warnings}. This one runs in the calling thread (tests, fallback).
+ */
+export function inThreadConverter(core) {
+  return async (buf, fileName, options) => convertMsg(core, buf, fileName, options);
 }
 
 /** Read a File / Blob (from a picker, a drop or getAttachmentFile) and convert it. */
-export async function convertFile(core, file, options) {
+export async function convertFile(convert, file, options) {
+  const name = file && file.name;
+  checkSize(name, file && file.size);
   let buf;
   try {
     buf = await file.arrayBuffer();
   } catch (e) {
-    throw new ConversionError(file && file.name, 'BAD_INPUT', `"${file && file.name}" could not be read.`, e);
+    throw new ConversionError(name, 'BAD_INPUT', `"${name}" could not be read.`, e);
   }
-  return convertMsg(core, buf, file && file.name, options);
+  return convert(buf, name, options);
 }
 
 /** The list of messages shown in a tab, as an array (MV3 returns a MessageList). */
@@ -112,26 +144,34 @@ export async function waitForDisplay(api, tabId, { timeoutMs = 10000, stepMs = 1
 
 /**
  * Runs inside the displayed message (scripting.executeScript, func + args),
- * so it must be self-contained. Builds the bar with DOM calls only.
+ * so it must be self-contained. The bar lives in a closed shadow root under a
+ * host element with a random name, so the message's own HTML and CSS can
+ * neither fake it nor style it away (the host's inline !important display
+ * beats any author rule). Returns 'shown' only if the bar is actually visible.
  */
 export function injectWarningBar(heading, warnings) {
-  const ID = 'msg-for-thunderbird-warnings';
-  if (document.getElementById(ID)) return 'present';
+  const rnd = (globalThis.crypto && crypto.randomUUID ? crypto.randomUUID() : String(Math.random()).slice(2)).replace(/[^a-z0-9]/gi, '').toLowerCase();
+  const host = document.createElement(`msg-opener-${rnd}`);
+  for (const [k, v] of [['display', 'block'], ['visibility', 'visible'], ['opacity', '1'], ['position', 'static'], ['margin', '0 0 12px 0'],
+    ['padding', '0'], ['border', '0'], ['height', 'auto'], ['width', 'auto'], ['max-height', 'none'], ['overflow', 'visible'],
+    ['clip-path', 'none'], ['filter', 'none'], ['transform', 'none'], ['font-size', '13px'], ['line-height', '1.4']]) {
+    host.style.setProperty(k, v, 'important');
+  }
+  const root = host.attachShadow({ mode: 'closed' });
   const bar = document.createElement('div');
-  bar.id = ID;
   bar.setAttribute('role', 'status');
   Object.assign(bar.style, {
-    all: 'initial', display: 'block', boxSizing: 'border-box', margin: '0 0 12px 0', padding: '8px 12px',
+    all: 'initial', display: 'block', boxSizing: 'border-box', padding: '8px 12px',
     background: '#fff4ce', color: '#1f1f1f', border: '1px solid #c9a400', borderRadius: '4px',
     font: '13px/1.4 system-ui, sans-serif',
   });
   const close = document.createElement('button');
   close.type = 'button';
-  close.textContent = '×';
+  close.textContent = '\u00d7';
   close.title = 'Close';
   close.setAttribute('aria-label', 'Close');
   Object.assign(close.style, { float: 'right', font: 'inherit', fontSize: '16px', lineHeight: '1', border: '0', background: 'transparent', color: 'inherit', cursor: 'pointer' });
-  close.addEventListener('click', () => bar.remove());
+  close.addEventListener('click', () => host.remove());
   const title = document.createElement('div');
   Object.assign(title.style, { fontWeight: '600', display: 'block' });
   title.textContent = heading;
@@ -144,8 +184,15 @@ export function injectWarningBar(heading, warnings) {
     list.append(li);
   }
   bar.append(close, title, list);
-  const host = document.body || document.documentElement;
-  host.prepend(bar);
+  root.append(bar);
+  (document.body || document.documentElement).prepend(host);
+  const r = bar.getBoundingClientRect();
+  const cs = getComputedStyle(host);
+  const visible = r.height > 0 && r.width > 0 && cs.display !== 'none' && cs.visibility !== 'hidden' && Number(cs.opacity) > 0.1;
+  if (!visible) {
+    host.remove();
+    return 'hidden';
+  }
   return 'shown';
 }
 
@@ -155,8 +202,8 @@ export function warningHeading(fileName, count) {
 
 /**
  * Show the conversion warnings once, as a bar at the top of the opened
- * message. If the bar cannot be placed, fall back to showNotice so the
- * warnings are never dropped. Returns 'none', 'bar' or 'notice'.
+ * message. If the bar cannot be placed or is not visible, fall back to
+ * showNotice so the warnings are never dropped. Returns 'none', 'bar' or 'notice'.
  */
 export async function showWarnings(api, tab, fileName, warnings, showNotice, waitOptions) {
   if (!warnings || !warnings.length) return 'none';
@@ -167,7 +214,7 @@ export async function showWarnings(api, tab, fileName, warnings, showNotice, wai
     const res = await api.scripting.executeScript({ target: { tabId: tab.id }, func: injectWarningBar, args: [heading, warnings] });
     const r = Array.isArray(res) ? res[0] : res;
     if (r && r.error) throw r.error;
-    if (!r || (r.result !== 'shown' && r.result !== 'present')) throw new Error('bar not placed');
+    if (!r || r.result !== 'shown') throw new Error('bar not visible');
     return 'bar';
   } catch (e) {
     await showNotice({ title: heading, lines: warnings });
@@ -175,17 +222,35 @@ export async function showWarnings(api, tab, fileName, warnings, showNotice, wai
   }
 }
 
-/** Convert a .msg File and open it in Thunderbird's message viewer. */
-export async function openMsgFile(api, core, file, { showNotice, options } = {}) {
-  const { file: eml, warnings } = await convertFile(core, file, options);
-  const tab = await api.messageDisplay.open({ file: eml, active: true });
+/**
+ * Convert a .msg File and open it in a new message tab. location: 'tab' so
+ * the "open messages in an existing window" setting cannot replace an earlier
+ * message (and its bar) with this one.
+ */
+export async function openMsgFile(api, convert, file, { showNotice, options } = {}) {
+  const { file: eml, warnings } = await convertFile(convert, file, options);
+  const tab = await api.messageDisplay.open({ file: eml, location: 'tab', active: true });
   const shown = await showWarnings(api, tab, file.name, warnings, showNotice || (async () => {}));
   return { tab, warnings, shown };
 }
 
+export const IMPORT_PERMISSIONS = { permissions: ['accountsRead', 'messagesImport'] };
+
+/**
+ * Ask for the import permissions (optional in the manifest). Call it straight
+ * from a user action, with no await before it, or Thunderbird refuses the
+ * request. Resolves true if granted (at once, with no prompt, if already held).
+ */
+export function requestImportPermissions(api) {
+  return api.permissions.request(IMPORT_PERMISSIONS);
+}
+
 /** Convert a .msg File and import it into a mail folder. */
-export async function importMsgFile(api, core, file, folderId, { options } = {}) {
-  const { file: eml, warnings } = await convertFile(core, file, options);
+export async function importMsgFile(api, convert, file, folderId, { options } = {}) {
+  if (!(await api.permissions.contains(IMPORT_PERMISSIONS))) {
+    throw new ConversionError(file.name, 'NO_PERMISSION', `"${file.name}" was not imported: the add-on was not allowed to import messages. Choose "Import into folder" again to allow it.`);
+  }
+  const { file: eml, warnings } = await convertFile(convert, file, options);
   let header;
   try {
     header = await api.messages.import(eml, folderId);
@@ -204,8 +269,10 @@ export async function importMsgFile(api, core, file, folderId, { options } = {})
  * tab, but in Thunderbird 140 a message opened in its own tab is reported
  * with a tab id that getDisplayedMessages() does not know (seen in the
  * headless smoke test). So: try that tab, then the active tab, and accept a
- * message only if it really has the clicked attachments (same part name and
- * file name), so a wrong message can never be used.
+ * message only if it has every clicked attachment (same part name, file name,
+ * size and content type) and is the only candidate that does. Two displayed
+ * messages carrying the same attachment could still be confused; the result
+ * is then a same-named, same-size file from the user's own other message.
  */
 export async function findClickedMessage(api, tab, attachments) {
   const candidates = [];
@@ -219,6 +286,10 @@ export async function findClickedMessage(api, tab, attachments) {
   if (tab && tab.id != null) await tryList(() => api.messageDisplay.getDisplayedMessages(tab.id));
   if (!candidates.length) await tryList(() => api.messageDisplay.getDisplayedMessages());
   if (!candidates.length) throw new Error('no message is displayed');
+  const same = (l, a) => l.partName === a.partName && l.name === a.name
+    && (a.size == null || l.size == null || l.size === a.size)
+    && (!a.contentType || !l.contentType || l.contentType === a.contentType);
+  const matches = [];
   for (const m of candidates) {
     let listed;
     try {
@@ -226,17 +297,20 @@ export async function findClickedMessage(api, tab, attachments) {
     } catch (e) {
       continue;
     }
-    const ok = attachments.every((a) => listed.some((l) => l.partName === a.partName && l.name === a.name));
-    if (ok) return m.id;
+    if (attachments.every((a) => listed.some((l) => same(l, a)))) matches.push(m.id);
   }
-  throw new Error(candidates.length > 1 ? 'more than one message is displayed' : 'the displayed message does not have that attachment');
+  if (matches.length === 1) return matches[0];
+  throw new Error(matches.length > 1 ? 'more than one displayed message has that attachment'
+    : candidates.length > 1 ? 'more than one message is displayed' : 'the displayed message does not have that attachment');
 }
 
 /**
  * Menu flow: open each .msg attachment of the displayed message. Errors and
- * conversion problems go to showNotice; one bad attachment does not stop the rest.
+ * conversion problems go to showNotice; one bad attachment does not stop the
+ * rest. progress(name) may return {done()}: a "Converting…" notice that the
+ * flow closes when the file is open.
  */
-export async function openMsgAttachments(api, core, tab, attachments, { showNotice, options } = {}) {
+export async function openMsgAttachments(api, convert, tab, attachments, { showNotice, progress, options } = {}) {
   const notice = showNotice || (async () => {});
   const atts = (attachments || []).filter(isMsgAttachment);
   const results = [];
@@ -252,12 +326,21 @@ export async function openMsgAttachments(api, core, tab, attachments, { showNoti
     return results;
   }
   for (const att of atts) {
+    let busy = null;
     try {
+      checkSize(att.name, att.size);
+      busy = progress && !(att.size < PROGRESS_MIN_BYTES) ? await progress(att.name) : null;
       const raw = await api.messages.getAttachmentFile(messageId, att.partName);
       const file = raw.name ? raw : new File([raw], att.name || 'attachment.msg');
       const named = file.name === att.name || !att.name ? file : new File([file], att.name, { type: file.type });
-      results.push({ name: att.name, ...(await openMsgFile(api, core, named, { showNotice: notice, options })) });
+      const { file: eml, warnings } = await convertFile(convert, named, options);
+      const tabOpened = await api.messageDisplay.open({ file: eml, location: 'tab', active: true });
+      if (busy) await busy.done();
+      busy = null;
+      const shown = await showWarnings(api, tabOpened, named.name, warnings, notice);
+      results.push({ name: att.name, tab: tabOpened, warnings, shown });
     } catch (e) {
+      if (busy) await busy.done();
       const msg = e instanceof ConversionError ? e.message : `"${att.name}" could not be opened: ${e && e.message ? e.message : e}`;
       await notice({ title: 'The attachment could not be opened', lines: [msg] });
       results.push({ name: att.name, error: msg });
