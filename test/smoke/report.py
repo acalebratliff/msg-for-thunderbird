@@ -1,22 +1,50 @@
-# Print the smoke log and a pass/fail line per check.
+# Turn the smoke log into pass/fail checks. Exits 1 if any check fails.
 import json, sys
 r = json.load(open(sys.argv[1]))
 log = json.loads(r[1][3]['value'] or '[]') if isinstance(r[0], list) else r[3]['value']
 d = {}
 for x in log: d.update(x)
-def ok(name, cond):
-    print(('PASS ' if cond else 'FAIL ') + name)
-    return cond
-res = [
-  ok('installs as MV3 with exactly the declared permissions', d.get('extension', {}).get('manifestVersion') == 3 and not d['extension']['errors']),
-  ok('disk path: 2 opened, 1 honest error', len(d.get('openedTabs', [])) == 2 and 'is not an Outlook message' in ' '.join(d.get('pageResults', []))),
-  ok('disk path: warning bar in opened message', all(t.get('bar') for t in d.get('openedTabs', [])) and d.get('openedTabs')),
-  ok('attachment path: opens with bar', bool(d.get('attachment:warnings.msg', {}).get('newTabs')) and d['attachment:warnings.msg']['newTabs'][0]['bar']),
-  ok('attachment path: nested .msg file opens', bool(d.get('attachment:nested.msg', {}).get('newTabs'))),
-  ok('attachment path: bad file gives a notice', 'is not an Outlook message' in ' '.join(d.get('attachment:not-a-msg.msg', {}).get('notices', []))),
-  ok('nested path: .msg inside a converted (external) message opens', bool(d.get('nested:attached copy.msg', {}).get('newTabs'))),
-  ok('menu hidden on non-.msg attachment', d.get('menu-on-eml-attachment', {}).get('error') == 'menu item not visible'),
-  ok('import path: imported, duplicate refused, damaged file reported', d.get('import', {}).get('after', 0) == d.get('import', {}).get('before', -9) + 1 and len(d['import']['results']) == 3),
-]
-print(json.dumps(log, indent=1)[:200000] if '-v' in sys.argv else '')
-print(f'{sum(map(bool, res))}/{len(res)} checks passed')
+if '-v' in sys.argv: print(json.dumps(log, indent=1))
+remote = d.get('pageRemote')
+results = []
+def check(name, fn, needs_page=False):
+    if needs_page and remote:
+        print('SKIP ' + name + ' (extension pages out of process)'); return
+    try: ok = bool(fn())
+    except Exception as e: ok = False; name += f' [{type(e).__name__}: {e}]'
+    results.append(ok); print(('PASS ' if ok else 'FAIL ') + name)
+ext = lambda: d['extension']
+tabs_by = lambda key: {t['subject']: t for t in d[key]['tabs']}
+def bar_ok(t): return t['bar'] and t['bar']['visible'] and t['bar']['closedShadow'] and 'could not be carried over' in t['bar']['text']
+check('no fatal error in the harness', lambda: 'fatal' not in d and d.get('end'))
+check('installs: MV3, active, no errors or warnings', lambda: ext()['manifestVersion'] == 3 and ext()['active'] and not ext()['errors'] and not ext()['warnings'])
+check('install grants exactly the 5 declared permissions', lambda: ext()['perms'] == ['accountsRead', 'menus', 'messagesImport', 'messagesRead', 'scripting'])
+check('disk: warnings.msg, nested.msg, hostile-css.msg open with a visible bar in a closed shadow root',
+      lambda: all(bar_ok(tabs_by('disk')[s]) for s in ['Synthetic message with warnings', 'Synthetic outer message', 'Synthetic message hiding elements']), True)
+check('disk: hidden body -> warnings go to a notice window instead',
+      lambda: tabs_by('disk')['Synthetic message with a hidden body']['bar'] is None and any('hidden-body.msg' in n and 'could not be carried over' in n for n in d['disk']['notices']), True)
+check('disk: not-a-msg.msg gets an honest error', lambda: any('"not-a-msg.msg" is not an Outlook message (.msg) file' in x for x in d['disk']['results']), True)
+check('disk: 26 MB file refused by the size cap', lambda: any('larger than the 25 MB this add-on opens; it was not opened' in x for x in d['disk']['results']), True)
+check('disk: 20 MB file opens', lambda: any('Opened' in x for x in d['disk-big']['results']) and d['disk-big']['tabs'], True)
+check('attachment: warnings.msg opens with a visible bar', lambda: bar_ok(d['attachment:warnings.msg']['newTabs'][0]))
+check('attachment: nested.msg opens', lambda: d['attachment:nested.msg']['newTabs'][0]['subject'] == 'Synthetic outer message')
+check('attachment: not-a-msg.msg gives an error notice and opens nothing',
+      lambda: not d['attachment:not-a-msg.msg']['newTabs'] and any('is not an Outlook message' in n for n in d['attachment:not-a-msg.msg']['notices']))
+check('attachment: 20 MB opens, "Converting" notice shown then closed',
+      lambda: d['attachment:big-20mb.msg']['newTabs'] and any('Converting "big-20mb.msg"' in t for t in d['attachment:big-20mb.msg']['seen'])
+      and not any('Converting' in n for n in d['attachment:big-20mb.msg']['notices']))
+check('nested: .msg inside a converted (external) message opens', lambda: d['nested']['newTabs'][0]['subject'] == 'Synthetic plain message')
+check('menu entry hidden on a non-.msg attachment (.eml)', lambda: d['menu-on-eml'].get('error') == 'menu item not visible')
+check('menu: .msg -> .txt -> .msg: opens, hidden, then present and opens again',
+      lambda: d['attachment:seq1:warnings.msg']['newTabs'] and d['attachment:seq2:notes.txt']['menu'].get('error') == 'menu item not visible'
+      and d['attachment:seq3:warnings.msg']['menu'].get('clicked') and d['attachment:seq3:warnings.msg']['newTabs'])
+check('import: with/without Message-ID each imported once, duplicates refused, damaged file reported',
+      lambda: d['import']['radioChecked'] and d['import']['after'] == d['import']['before'] + 2
+      and 'Imported into Local Folders › Smoke' in d['import']['results'][0] and 'same Message-ID' in d['import']['results'][1]
+      and 'damaged structure' in d['import']['results'][2]
+      and 'Imported into Local Folders › Smoke' in d['import']['results'][3] and 'same Message-ID' in d['import']['results'][4], True)
+for k in ['disk-big', 'attachment:big-20mb.msg']:
+    if k in d: print(f'info {k}: {d[k].get("ms")} ms, biggest UI-thread gap {d[k].get("uiMaxGapMs")} ms')
+print(f'Thunderbird {d.get("appVersion")}, extensions remote: {d.get("remoteExtensions")}')
+print(f'{sum(results)}/{len(results)} checks passed')
+sys.exit(0 if all(results) else 1)

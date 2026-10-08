@@ -1,11 +1,13 @@
 # Headless Thunderbird smoke driver (raw Marionette protocol, chrome context).
-# usage: python3 -I driver.py <profile-dir> <script.js> <json-args> <out.json>
+# usage: python3 -I driver.py <profile-dir> <script.js> <json-args> <out.json> [remote 0|1]
 import socket, json, subprocess, time, sys, os
 prof, script, args, outp = sys.argv[1], sys.argv[2], json.loads(sys.argv[3]), sys.argv[4]
+remote = len(sys.argv) > 5 and sys.argv[5] == '1'
 os.makedirs(prof, exist_ok=True)
 with open(os.path.join(prof, 'user.js'), 'w') as f:
     for k, v in {
-        'marionette.port': 2829, 'xpinstall.signatures.required': False, 'extensions.webextensions.remote': False,
+        'marionette.port': 2829, 'xpinstall.signatures.required': False, 'extensions.webextensions.remote': remote,
+        'extensions.webextOptionalPermissionPrompts': False,
         'mail.provider.suppress_dialog_on_startup': True, 'mailnews.start_page.enabled': False,
         'mail.shell.checkDefaultClient': False, 'mail.spotlight.firstRunDone': True,
         'datareporting.policy.dataSubmissionEnabled': False, 'app.update.auto': False, 'app.update.enabled': False,
@@ -14,7 +16,7 @@ with open(os.path.join(prof, 'user.js'), 'w') as f:
     }.items():
         f.write(f'user_pref("{k}", {json.dumps(v)});\n')
 log = open(os.path.join(prof, 'tb.log'), 'w')
-p = subprocess.Popen(['thunderbird', '--headless', '--marionette', '-remote-allow-system-access', '--no-remote', '--profile', prof], stdout=log, stderr=log)
+p = subprocess.Popen([os.environ.get('TB_BIN', 'thunderbird'), '--headless', '--marionette', '-remote-allow-system-access', '--no-remote', '--profile', prof], stdout=log, stderr=log)
 print('PID', p.pid, flush=True)
 s = None
 try:
@@ -35,7 +37,7 @@ try:
         m = json.dumps([0, i, cmd, params]).encode(); s.sendall(str(len(m)).encode() + b':' + m)
         return rd()
     rd(); send('WebDriver:NewSession', {})
-    send('Marionette:SetContext', {'value': 'chrome'}); send('WebDriver:SetTimeouts', {'script': 180000})
+    send('Marionette:SetContext', {'value': 'chrome'}); send('WebDriver:SetTimeouts', {'script': 400000})
     time.sleep(3)
     r = send('WebDriver:ExecuteAsyncScript', {'script': open(script).read(), 'args': args})
     if r[2] is None or r[3] is None:

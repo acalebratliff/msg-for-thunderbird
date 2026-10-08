@@ -1,55 +1,94 @@
+// Runs in Thunderbird's chrome context via Marionette (see driver.py).
+// Logs observations; report.py turns them into pass/fail checks.
 const done = arguments[arguments.length - 1];
-const [xpiPath, fixDir, carrierPath] = arguments;
+const [xpiPath, fixDir, carrierPath, workDir] = arguments;
 (async () => {
   const log = [];
   const L = (k, v) => { log.push({ [k]: v }); try { Services.wm.getMostRecentWindow('mail:3pane').__smokeLog = JSON.stringify(log); } catch (e) {} };
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const nsFile = (p) => { const f = Cc['@mozilla.org/file/local;1'].createInstance(Ci.nsIFile); f.initWithPath(p); return f; };
   const waitFor = async (fn, ms = 10000) => { const end = Date.now() + ms; for (;;) { try { const v = await fn(); if (v) return v; } catch (e) {} if (Date.now() > end) return null; await sleep(100); } };
+  const text = (s) => String(s || '').replace(/\s+/g, ' ').trim();
   try {
     const { AddonManager } = ChromeUtils.importESModule('resource://gre/modules/AddonManager.sys.mjs');
     const { ExtensionParent } = ChromeUtils.importESModule('resource://gre/modules/ExtensionParent.sys.mjs');
     const { MailServices } = ChromeUtils.importESModule('resource:///modules/MailServices.sys.mjs');
     L('appVersion', Services.appinfo.version);
-    L('step', 'installing');
+    L('remoteExtensions', Services.prefs.getBoolPref('extensions.webextensions.remote'));
     const addon = await AddonManager.installTemporaryAddon(nsFile(xpiPath));
-    L('installed', { id: addon.id, version: addon.version, active: addon.isActive, name: addon.name });
     const ext = await waitFor(() => ExtensionParent.GlobalManager.getExtension(addon.id));
     await sleep(1500);
-    L('extension', { perms: [...ext.permissions].sort(), warnings: ext.warnings, errors: ext.errors, manifestVersion: ext.manifestVersion });
+    const perms = () => [...ext.permissions].filter((p) => !p.startsWith('internal:')).sort();
+    L('extension', { id: addon.id, active: addon.isActive, manifestVersion: ext.manifestVersion, perms: perms(), warnings: ext.warnings, errors: ext.errors });
+
     const win = Services.wm.getMostRecentWindow('mail:3pane');
     const tabmail = win.document.getElementById('tabmail');
     const msgTabs = () => tabmail.tabInfo.filter((t) => t.mode.name === 'mailMessageTab');
-    const tabDoc = (t) => t.chromeBrowser.contentWindow.getMessagePaneBrowser().contentDocument;
+    // Event-loop lag in the main (UI) process: the biggest gap between 50 ms ticks.
+    let lastTick = Date.now(); let maxGap = 0;
+    const ticker = setInterval(() => { const now = Date.now(); maxGap = Math.max(maxGap, now - lastTick); lastTick = now; }, 50);
+    const resetLag = () => { lastTick = Date.now(); maxGap = 0; };
+
+    const findBar = (doc) => {
+      const host = [...doc.querySelectorAll('*')].find((e) => e.localName.startsWith('msg-opener-'));
+      if (!host) return null;
+      const root = host.openOrClosedShadowRoot;
+      const r = host.getBoundingClientRect();
+      return { text: text(root && root.textContent).slice(0, 400), visible: r.height > 0 && r.width > 0, closedShadow: !!root && !host.shadowRoot };
+    };
     const tabState = (t) => {
       const aboutMsg = t.chromeBrowser.contentWindow;
-      const d = tabDoc(t);
-      const bar = d.getElementById('msg-for-thunderbird-warnings');
+      const d = aboutMsg.getMessagePaneBrowser().contentDocument;
       return {
-        title: t.title,
         subject: aboutMsg.gMessage ? aboutMsg.gMessage.mime2DecodedSubject : null,
-        body: d.body ? d.body.textContent.replace(/\s+/g, ' ').trim().slice(0, 160) : null,
-        bar: bar ? bar.textContent.replace(/\s+/g, ' ').slice(0, 400) : null,
-        attachments: [...aboutMsg.document.querySelectorAll('#attachmentList richlistitem')].map((i) => i.getAttribute('name') || i.attachment?.name),
+        body: d.body ? text(d.body.textContent).slice(0, 120) : null,
+        bar: findBar(d),
+        attachments: [...aboutMsg.document.querySelectorAll('#attachmentList richlistitem')].map((i) => i.attachment && i.attachment.name),
       };
     };
+    // Notice windows (errors, warnings fallback, "Converting…"); seen titles are recorded while polling.
+    const noticeWindows = () => [...Services.wm.getEnumerator(null)].map((w) => {
+      const b = w.document && [...w.document.querySelectorAll('browser')].find((x) => x.currentURI && /notice\/notice\.html/.test(x.currentURI.spec));
+      return b ? { w, b } : null;
+    }).filter(Boolean);
+    const noticeTexts = () => noticeWindows().map(({ b }) => {
+      try { return text(b.contentDocument.body.textContent); } catch (e) { try { const j = JSON.parse(decodeURIComponent(b.currentURI.ref || '')); return text(`${j.title} ${(j.lines || []).join(' ')}`); } catch (e2) { return decodeURIComponent(b.currentURI.ref || ''); } }
+    });
+    const closeNotices = () => { for (const { w } of noticeWindows()) w.close(); };
+    const seenTitles = new Set();
+    const watcher = setInterval(() => { for (const t of noticeTexts()) seenTitles.add(t.slice(0, 80)); }, 100);
 
-    // ---- disk path: the add-on page with a file picked ----
-    const before = msgTabs().length;
+    // ---- disk path and import: the add-on page (needs in-process extensions to reach its DOM) ----
     const pageTab = tabmail.openTab('contentTab', { url: ext.baseURI.resolve('page/open.html') });
-    const page = await waitFor(() => { const d = pageTab.browser.contentDocument; return d && d.getElementById('picker') && d.readyState === 'complete' ? d : null; });
-    L('pageLoaded', { remote: pageTab.browser.isRemoteBrowser, title: page && page.title });
-    if (page) {
-      await sleep(500);
-      const input = page.getElementById('picker');
-      const files = [];
-      for (const n of ['warnings.msg', 'nested.msg', 'not-a-msg.msg']) files.push(await File.createFromNsIFile(nsFile(fixDir + '/' + n)));
-      input.mozSetFileArray(files);
-      input.dispatchEvent(new pageTab.browser.contentWindow.Event('change', { bubbles: true }));
-      await waitFor(() => page.querySelectorAll('#results > li').length >= 3, 20000);
-      await sleep(2500);
-      L('pageResults', [...page.querySelectorAll('#results > li')].map((li) => li.textContent.replace(/\s+/g, ' ').slice(0, 300)));
-      L('openedTabs', msgTabs().slice(before).map(tabState));
+    await sleep(2000);
+    const pageRemote = pageTab.browser.isRemoteBrowser;
+    L('pageRemote', pageRemote);
+    let page = null;
+    if (!pageRemote) {
+      page = await waitFor(() => { const d = pageTab.browser.contentDocument; return d && d.getElementById('picker') && d.readyState === 'complete' ? d : null; });
+      const pwin = pageTab.browser.contentWindow;
+      const pick = async (names) => {
+        const r0 = page.querySelectorAll('#results > li').length;
+        const files = [];
+        for (const n of names) files.push(await File.createFromNsIFile(nsFile(n.startsWith('/') ? n : `${fixDir}/${n}`)));
+        page.getElementById('picker').mozSetFileArray(files);
+        page.getElementById('picker').dispatchEvent(new pwin.Event('change', { bubbles: true }));
+        await waitFor(() => { const lis = [...page.querySelectorAll('#results > li')].slice(r0); return lis.length >= names.length && lis.every((li) => !/Converting…/.test(li.textContent)); }, 120000);
+        await sleep(2500);
+        return [...page.querySelectorAll('#results > li')].slice(r0).map((li) => text(li.textContent).slice(0, 300));
+      };
+      const before = msgTabs().length;
+      closeNotices();
+      const results = await pick(['warnings.msg', 'nested.msg', 'not-a-msg.msg', 'hostile-css.msg', 'hidden-body.msg', `${workDir}/huge-26mb.msg`]);
+      await sleep(1500);
+      L('disk', { results, tabs: msgTabs().slice(before).map(tabState), notices: noticeTexts() });
+      closeNotices();
+      // 20 MB: time it and watch the UI thread
+      const b2 = msgTabs().length;
+      resetLag();
+      const t0 = Date.now();
+      const bigRes = await pick([`${workDir}/big-20mb.msg`]);
+      L('disk-big', { results: bigRes, ms: Date.now() - t0 - 2500, uiMaxGapMs: maxGap, tabs: msgTabs().slice(b2).map(tabState) });
     }
 
     // ---- attachment path: a stored message carrying .msg attachments ----
@@ -57,11 +96,12 @@ const [xpiPath, fixDir, carrierPath] = arguments;
     const root = MailServices.accounts.localFoldersServer.rootMsgFolder;
     let folder; try { folder = root.getChildNamed('Smoke'); } catch (e) { folder = null; }
     if (!folder) { root.createSubfolder('Smoke', null); folder = await waitFor(() => { try { return root.getChildNamed('Smoke'); } catch (e) { return null; } }); }
-    await Promise.race([sleep(10000), new Promise((res) => MailServices.copy.copyFileMessage(nsFile(carrierPath), folder, null, false, 0, '', { OnStartCopy() {}, OnProgress() {}, SetMessageKey() {}, GetMessageId() {}, OnStopCopy(st) { res(st); } }, null))]);
+    await Promise.race([sleep(20000), new Promise((res) => MailServices.copy.copyFileMessage(nsFile(carrierPath), folder, null, false, 0, '', { OnStartCopy() {}, OnProgress() {}, SetMessageKey() {}, GetMessageId() {}, OnStopCopy(st) { res(st); } }, null))]);
     const hdr = await waitFor(() => [...folder.messages][0]);
-    L('carrier', hdr && hdr.mime2DecodedSubject);
 
     async function clickMenuOn(tab, attName) {
+      tabmail.switchToTab(tab);
+      await sleep(1500);
       const aboutMsg = tab.chromeBrowser.contentWindow;
       const doc = aboutMsg.document;
       try { aboutMsg.toggleAttachmentList(true); } catch (e) {}
@@ -69,106 +109,90 @@ const [xpiPath, fixDir, carrierPath] = arguments;
       if (!item) return { error: `attachment ${attName} not listed` };
       doc.getElementById('attachmentList').selectItem(item);
       const popup = doc.getElementById('attachmentItemContext');
-      const tries = [];
-      const shownP = () => new Promise((r) => { popup.addEventListener('popupshown', () => r(true), { once: true }); setTimeout(() => r(false), 3000); });
-      let p = shownP();
+      const shownP = () => new Promise((r) => { popup.addEventListener('popupshown', () => r(true), { once: true }); setTimeout(() => r(false), 4000); });
       const rect = item.getBoundingClientRect();
-      tries.push({ rect: [rect.left, rect.top, rect.width, rect.height] });
-      aboutMsg.windowUtils.sendMouseEvent('contextmenu', rect.left + 5, rect.top + 5, 2, 1, 0);
-      tries.push({ sendMouseEvent: await p, state: popup.state });
+      let p = shownP();
+      try { aboutMsg.windowUtils.sendMouseEvent('contextmenu', rect.left + 5, rect.top + 5, 2, 1, 0); } catch (e) { /* not in newer Gecko */ }
+      await p;
       if (popup.state !== 'open') {
+        // Newer Gecko has no windowUtils.sendMouseEvent: dispatch a contextmenu on the item and open the popup with it.
         p = shownP();
         const ev = new aboutMsg.MouseEvent('contextmenu', { bubbles: true, cancelable: true, button: 2, clientX: rect.left + 5, clientY: rect.top + 5 });
-        popup.openPopupAtScreen(item.screenX + 5, item.screenY + 5, true, ev);
-        tries.push({ openPopupAtScreen: await p, state: popup.state });
+        item.dispatchEvent(ev);
+        await sleep(300);
+        if (popup.state !== 'open') popup.openPopupAtScreen(item.screenX + 5, item.screenY + 5, true, ev);
+        await p;
       }
       await sleep(800);
-      const items = [...popup.querySelectorAll('menuitem')].filter((m) => /open-msg/.test(m.id));
-      const info = items.map((m) => ({ id: m.id, label: m.label, hidden: m.hidden }));
-      const target = items.find((m) => !m.hidden);
-      if (!target) { try { popup.hidePopup(); } catch (e) {} return { error: 'menu item not visible', info, tries }; }
+      const target = [...popup.querySelectorAll('menuitem')].find((m) => /open-msg/.test(m.id) && !m.hidden);
+      if (!target) { try { popup.hidePopup(); } catch (e) {} return { error: 'menu item not visible' }; }
       popup.activateItem(target);
-      return { clicked: target.label, info, tries };
-    }
-    // API-level check through the add-on page's own messenger object
-    async function apiCheck(tab, label) {
-      const m = pageTab.browser.contentWindow.wrappedJSObject.messenger;
-      const tabId = ext.tabManager.getWrapper(tab).id;
-      const out = { tabId };
-      try {
-        const list = await m.messageDisplay.getDisplayedMessages(tabId);
-        const msgs = list.messages || list;
-        out.displayed = [...msgs].map((x) => ({ id: x.id, subject: x.subject, external: x.external }));
-        const atts = await m.messages.listAttachments(msgs[0].id);
-        out.attachments = [...atts].map((a) => ({ name: a.name, partName: a.partName, contentType: a.contentType, size: a.size }));
-        out.files = [];
-        for (const a of atts) {
-          const f = await m.messages.getAttachmentFile(msgs[0].id, a.partName);
-          out.files.push({ name: f.name, size: f.size, type: f.type });
-        }
-      } catch (e) { out.error = String(e); }
-      L('api:' + label, out);
+      return { clicked: target.label };
     }
     const carrierTab = tabmail.openTab('mailMessageTab', { messageURI: folder.getUriForMsg(hdr), background: false });
     await waitFor(() => carrierTab.chromeBrowser.contentWindow.gMessage, 10000);
     await sleep(2000);
-    L('carrierTab', tabState(carrierTab));
-    await apiCheck(carrierTab, 'carrier');
-    const pm = pageTab.browser.contentWindow.wrappedJSObject.messenger;
-    const seen = [];
-    win.__seen = seen;
-    pm.menus.onClicked.addListener(Cu.exportFunction((info, tab) => { seen.push(JSON.stringify({ info, tab })); }, pageTab.browser.contentWindow));
-    for (const name of ['warnings.msg', 'nested.msg', 'not-a-msg.msg']) {
+    // warnings.msg -> notes.txt -> warnings.msg: the entry must come back after a non-.msg attachment.
+    const seq = [['warnings.msg', 'seq1'], ['notes.txt', 'seq2'], ['warnings.msg', 'seq3']];
+    for (const [name, key] of seq) {
+      closeNotices();
       const n0 = msgTabs().length;
-      const wins0 = [...Services.wm.getEnumerator(null)].length;
-      tabmail.switchToTab(carrierTab);
+      const menu = await clickMenuOn(carrierTab, name);
+      if (menu.clicked) await waitFor(() => msgTabs().length > n0, 15000);
       await sleep(1500);
-      const r = await clickMenuOn(carrierTab, name);
-      await sleep(4000);
-      const newTabs = msgTabs().slice(n0).map(tabState);
-      const notices = [...Services.wm.getEnumerator(null)].filter((w) => /notice\/notice\.html/.test(w.document.documentURI) || [...(w.document.querySelectorAll ? w.document.querySelectorAll('browser') : [])].some((b) => /notice\/notice\.html/.test(b.currentURI && b.currentURI.spec)));
-      const noticeText = notices.map((w) => { const b = [...w.document.querySelectorAll('browser')].find((x) => /notice/.test(x.currentURI.spec)); return b && b.contentDocument ? b.contentDocument.body.textContent.replace(/\s+/g, ' ').trim() : '(no doc)'; });
-      L(`attachment:${name}`, { seen: seen.splice(0), menu: r, newTabs, windowsBefore: wins0, notices: noticeText });
-      for (const w of notices) w.close();
+      L(`attachment:${key}:${name}`, { menu, newTabs: msgTabs().slice(n0).map((t) => tabState(t).subject) });
     }
+    for (const name of ['warnings.msg', 'nested.msg', 'not-a-msg.msg', 'big-20mb.msg']) {
+      closeNotices();
+      seenTitles.clear();
+      const n0 = msgTabs().length;
+      resetLag();
+      const t0 = Date.now();
+      const menu = await clickMenuOn(carrierTab, name);
+      const opened = await waitFor(() => msgTabs().length > n0 || noticeTexts().some((t) => /could not be opened/.test(t)), 60000);
+      const ms = Date.now() - t0;
+      await sleep(3000);
+      L(`attachment:${name}`, { menu, ms, uiMaxGapMs: maxGap, opened: !!opened, newTabs: msgTabs().slice(n0).map(tabState), notices: noticeTexts(), seen: [...seenTitles] });
+    }
+    closeNotices();
 
-    // ---- nested: .msg attached inside the converted (external) message ----
+    // ---- nested: .msg attached inside the converted (external) message; menu absent on .eml ----
     const nestedTab = msgTabs().find((t) => { try { return /Synthetic outer message/.test(t.chromeBrowser.contentWindow.gMessage.mime2DecodedSubject); } catch (e) { return false; } });
     if (nestedTab) {
-      tabmail.switchToTab(nestedTab);
-      await sleep(1000);
-      await apiCheck(nestedTab, 'external-nested');
       const n0 = msgTabs().length;
-      const r = await clickMenuOn(nestedTab, 'attached copy.msg');
-      await sleep(4000);
-      L('nested:attached copy.msg', { menu: r, newTabs: msgTabs().slice(n0).map(tabState) });
-      tabmail.switchToTab(nestedTab);
-      await sleep(1500);
-      L('menu-on-eml-attachment', await clickMenuOn(nestedTab, 'Inner embedded.eml'));
-    } else L('nested', 'no converted outer message tab found');
+      const menu = await clickMenuOn(nestedTab, 'attached copy.msg');
+      await waitFor(() => msgTabs().length > n0, 15000);
+      await sleep(2000);
+      L('nested', { menu, newTabs: msgTabs().slice(n0).map(tabState) });
+      L('menu-on-eml', await clickMenuOn(nestedTab, 'Inner embedded.eml'));
+    } else L('nested', { error: 'no converted outer message tab' });
 
-    // ---- import path through the add-on page ----
-    tabmail.switchToTab(pageTab);
-    await sleep(1000);
-    const imp = page.querySelector('input[name="mode"][value="import"]');
-    imp.checked = true;
-    imp.dispatchEvent(new pageTab.browser.contentWindow.Event('change', { bubbles: true }));
-    const sel = page.getElementById('folder');
-    await waitFor(() => sel.options.length > 0, 8000);
-    const opts = [...sel.options].map((o) => o.textContent);
-    const smokeOpt = [...sel.options].find((o) => /Smoke/.test(o.textContent));
-    if (smokeOpt) sel.value = smokeOpt.value;
-    const n0 = folder.getTotalMessages(false);
-    const r0 = page.querySelectorAll('#results > li').length;
-    const files = [];
-    for (const n of ['simple.msg', 'simple.msg', 'truncated.msg']) files.push(await File.createFromNsIFile(nsFile(fixDir + '/' + n)));
-    page.getElementById('picker').mozSetFileArray(files);
-    page.getElementById('picker').dispatchEvent(new pageTab.browser.contentWindow.Event('change', { bubbles: true }));
-    await waitFor(() => page.querySelectorAll('#results > li').length >= r0 + 3, 20000);
-    await sleep(1500);
-    L('import', { folderOptions: opts, chosen: smokeOpt && smokeOpt.textContent, before: n0, after: folder.getTotalMessages(false),
-      results: [...page.querySelectorAll('#results > li')].slice(r0).map((li) => li.textContent.replace(/\s+/g, ' ')),
-      subjects: [...folder.messages].map((h) => h.mime2DecodedSubject) });
+    // ---- import: optional permissions requested by a real click on the radio ----
+    if (page) {
+      tabmail.switchToTab(pageTab);
+      await sleep(1000);
+      const pwin = pageTab.browser.contentWindow;
+      const radio = page.querySelector('input[name="mode"][value="import"]');
+      radio.click();
+      const sel = page.getElementById('folder');
+      await waitFor(() => sel.options.length > 0, 10000);
+      const smokeOpt = [...sel.options].find((o) => /Smoke/.test(o.textContent));
+      if (smokeOpt) sel.value = smokeOpt.value;
+      const n0 = folder.getTotalMessages(false);
+      const r0 = page.querySelectorAll('#results > li').length;
+      const files = [];
+      for (const n of ['simple.msg', 'simple.msg', 'truncated.msg', 'warnings.msg', 'warnings.msg']) files.push(await File.createFromNsIFile(nsFile(`${fixDir}/${n}`)));
+      page.getElementById('picker').mozSetFileArray(files);
+      page.getElementById('picker').dispatchEvent(new pwin.Event('change', { bubbles: true }));
+      await waitFor(() => { const lis = [...page.querySelectorAll('#results > li')].slice(r0); return lis.length >= 5 && lis.every((li) => !/Converting…/.test(li.textContent)); }, 30000);
+      await sleep(1500);
+      L('import', { radioChecked: radio.checked, folderOptions: [...sel.options].map((o) => o.textContent),
+        before: n0, after: folder.getTotalMessages(false),
+        results: [...page.querySelectorAll('#results > li')].slice(r0).map((li) => text(li.textContent)),
+        allRows: [...page.querySelectorAll('#results > li')].map((li) => text(li.textContent).slice(0, 160)) });
+    }
+    clearInterval(ticker);
+    clearInterval(watcher);
   } catch (e) {
     L('fatal', String(e) + '\n' + (e.stack || ''));
   }
