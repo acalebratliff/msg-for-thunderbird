@@ -30,6 +30,14 @@ if (dirty) {
   process.exit(1);
 }
 const commit = git('rev-parse', 'HEAD');
+let repository = null;
+try {
+  const url = git('remote', 'get-url', 'origin');
+  const m = /github\.com[:/]([^/]+\/[^/.]+?)(?:\.git)?$/.exec(url);
+  if (m) repository = `https://github.com/${m[1]}`;
+} catch (e) {
+  // no remote: the record has no repository link
+}
 const pkg = JSON.parse(readFileSync(join(coreDir, 'package.json'), 'utf8'));
 const sha256 = (p) => createHash('sha256').update(readFileSync(p)).digest('hex');
 
@@ -47,6 +55,7 @@ const record = {
   name: pkg.name,
   version: pkg.version,
   commit,
+  repository,
   source: 'dist/msg-eml-core.js, built by "npm run build" (scripts/build.js) in the core repo',
   dependencies: pkg.dependencies,
   sha256: files,

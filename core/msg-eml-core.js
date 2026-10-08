@@ -5432,7 +5432,7 @@ function buildEml(m, opts = {}, depth = 0) {
   if (from.email && sender.email && from.email.toLowerCase() !== sender.email.toLowerCase()) {
     headers.push(["Sender", fmt(sender)]);
   }
-  if (fromStr && !from.email) warnings.push(`sender has no SMTP address in the file; From shows the name only ("${from.name}")`);
+  if (fromStr && !from.email) warnings.push(`sender has no SMTP address in the file; From shows ${(opts.unresolvedAddress || "invalid-domain") === "name-only" ? "the name only" : "the name with a placeholder .invalid address"} ("${from.name}")`);
   const people = { to: [], cc: [], bcc: [] };
   let unresolved = 0;
   for (const rc of m.recipients) {

@@ -1,14 +1,15 @@
 {
   "name": "msg-eml-core",
   "version": "0.1.0",
-  "commit": "c1b8a851986a7a52eac7337f528926466ae10d0a",
+  "commit": "9e900a272521fc06570f764e208597098b88152c",
+  "repository": "https://github.com/acalebratliff/msg-eml-core",
   "source": "dist/msg-eml-core.js, built by \"npm run build\" (scripts/build.js) in the core repo",
   "dependencies": {
     "@kenjiuno/decompressrtf": "0.1.4",
     "@kenjiuno/msgreader": "1.28.0"
   },
   "sha256": {
-    "msg-eml-core.js": "faae000160a3f12daa61057188c2fa814074ea255664ea12cd9aedcb2f7bb608",
+    "msg-eml-core.js": "3d9b6dc18197b08941c7ead888cb24c3da9c1c53ea975e2eeb113586a3cf7cc4",
     "LICENSE": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
     "NOTICE": "9b4d5341489f5c6fa76527940ad9972783d3f32be4a9d6793d6870b6e4034762",
     "THIRD_PARTY_LICENSES": "396d12efe7df3a9d45191d2ce8b1f18efa1f187f6f77820c2c13db8c6fe7d47a"
