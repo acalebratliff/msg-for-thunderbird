@@ -158,12 +158,12 @@ export function warningHeading(fileName, count) {
  * message. If the bar cannot be placed, fall back to showNotice so the
  * warnings are never dropped. Returns 'none', 'bar' or 'notice'.
  */
-export async function showWarnings(api, tab, fileName, warnings, showNotice) {
+export async function showWarnings(api, tab, fileName, warnings, showNotice, waitOptions) {
   if (!warnings || !warnings.length) return 'none';
   const heading = warningHeading(fileName, warnings.length);
   try {
     if (!tab || tab.id == null) throw new Error('no tab');
-    if (!(await waitForDisplay(api, tab.id))) throw new Error('message not displayed in time');
+    if (!(await waitForDisplay(api, tab.id, waitOptions))) throw new Error('message not displayed in time');
     const res = await api.scripting.executeScript({ target: { tabId: tab.id }, func: injectWarningBar, args: [heading, warnings] });
     const r = Array.isArray(res) ? res[0] : res;
     if (r && r.error) throw r.error;

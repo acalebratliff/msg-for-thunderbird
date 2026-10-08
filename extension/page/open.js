@@ -1,5 +1,5 @@
 // The add-on page: pick or drop .msg files, then open each one or import it
-// into a folder. All DOM is built with textContent; no innerHTML.
+// into a folder. All DOM is built with createElement and textContent.
 import * as core from '../core/msg-eml-core.js';
 import { openMsgFile, importMsgFile, ConversionError, warningHeading } from '../lib/glue.js';
 import { makeShowNotice } from '../lib/notice.js';
