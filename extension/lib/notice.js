@@ -1,40 +1,39 @@
 // Small windows with a title and lines of text: errors, warnings that could
 // not be shown in a bar, and "Converting…" while a large attachment converts.
 // The text travels in the URL fragment, which never leaves the add-on.
-async function openNotice(api, title, lines) {
-  const data = encodeURIComponent(JSON.stringify({ title, lines }));
-  return api.windows.create({ type: 'popup', url: `/notice/notice.html#${data}`, width: 520, height: 320, allowScriptsToClose: true });
+// The flows never wait for a window to open: windows.create can resolve late
+// (in a headless run it did not resolve at all), and the work must go on. A
+// "Converting…" window is closed by a runtime message carrying its token,
+// which notice.js listens for, so closing does not need the window id either.
+function openNotice(api, data) {
+  const hash = encodeURIComponent(JSON.stringify(data));
+  return api.windows.create({ type: 'popup', url: `/notice/notice.html#${hash}`, width: 520, height: 320, allowScriptsToClose: true });
 }
 
 export function makeShowNotice(api) {
   return async function showNotice({ title, lines }) {
-    try {
-      await openNotice(api, title, lines);
-    } catch (e) {
-      console.error('MSG Opener:', title, lines, e);
-    }
+    openNotice(api, { title, lines }).catch((e) => console.error('MSG Opener:', title, lines, e));
   };
 }
 
-/** progress(name) for openMsgAttachments: a notice shown while converting, closed when done. */
+/**
+ * progress(name) for openMsgAttachments: a notice shown while converting,
+ * closed when done. progress.isActive(token) answers a window that loads
+ * after done() was sent, so it can close itself.
+ */
 export function makeProgress(api) {
-  return async function progress(name) {
-    let win = null;
-    try {
-      win = await openNotice(api, `Converting "${name}"…`, ['The message opens in a new tab when it is ready.']);
-    } catch (e) {
-      // no window: the conversion still runs
-    }
+  const active = new Set();
+  async function progress(name) {
+    const token = (globalThis.crypto && crypto.randomUUID) ? crypto.randomUUID() : String(Math.random()).slice(2);
+    active.add(token);
+    openNotice(api, { title: `Converting "${name}"…`, lines: ['The message opens in a new tab when it is ready.'], token }).catch(() => {});
     return {
       async done() {
-        if (!win) return;
-        try {
-          await api.windows.remove(win.id);
-        } catch (e) {
-          // already closed by the user
-        }
-        win = null;
+        active.delete(token);
+        api.runtime.sendMessage({ type: 'close-notice', token }).catch(() => {});
       },
     };
-  };
+  }
+  progress.isActive = (token) => active.has(token);
+  return progress;
 }

@@ -40,6 +40,12 @@ api.menus.onClicked.addListener((info, tab) => {
     showNotice({ title: 'The attachment could not be opened', lines: [String(e && e.message ? e.message : e)] }));
 });
 
+// A "Converting…" window that opened after its conversion finished asks here.
+api.runtime.onMessage.addListener((msg) => {
+  if (msg && msg.type === 'notice-active') return Promise.resolve(progress.isActive(msg.token));
+  return undefined;
+});
+
 api.action.onClicked.addListener(() => {
   api.tabs.create({ url: '/page/open.html' });
 });
