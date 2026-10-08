@@ -1,7 +1,7 @@
 // Background (event page). Registers the attachment menu and the toolbar
 // button, and runs the attachment flow. No network access is used anywhere.
 import * as core from './core/msg-eml-core.js';
-import { isMsgAttachment, openMsgAttachments } from './lib/glue.js';
+import { openMsgAttachments, menuStateFor } from './lib/glue.js';
 import { makeShowNotice, makeProgress } from './lib/notice.js';
 import { workerConverter } from './lib/worker-converter.js';
 
@@ -23,14 +23,14 @@ async function createMenus() {
 api.runtime.onInstalled.addListener(createMenus);
 api.runtime.onStartup.addListener(createMenus);
 
-// Show the entry only when a .msg attachment is under the pointer.
+// Show the entry only when a .msg attachment is under the pointer. Decide
+// from the menu's contexts, not info.menuIds: Thunderbird leaves a hidden item
+// out of menuIds, so a guard on it would never show the item again. Set the
+// visibility explicitly on every attachment menu.
 api.menus.onShown.addListener(async (info) => {
-  if (!info.menuIds || !info.menuIds.includes(MENU_ID)) return;
-  const n = (info.attachments || []).filter(isMsgAttachment).length;
-  await api.menus.update(MENU_ID, {
-    visible: n > 0,
-    title: n > 1 ? `Open ${n} .msg attachments as messages` : 'Open as message',
-  });
+  const state = menuStateFor(info);
+  if (!state) return;
+  await api.menus.update(MENU_ID, state);
   await api.menus.refresh();
 });
 
