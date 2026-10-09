@@ -1,7 +1,7 @@
 // A converter (see glue.js) that runs each conversion in its own module
 // Worker (lib/convert-worker.js). If a Worker cannot be started, it converts
 // in the calling thread instead, so the add-on still works.
-import { ConversionError, EML_TYPE, inThreadConverter } from './glue.js';
+import { ConversionError, EML_TYPE, inThreadConverter, unexpectedMessage } from './glue.js';
 
 export function workerConverter(core, workerUrl = new URL('./convert-worker.js', import.meta.url)) {
   const fallback = inThreadConverter(core);
@@ -23,7 +23,7 @@ export function workerConverter(core, workerUrl = new URL('./convert-worker.js',
       return { file: new File([data.eml], data.name, { type: EML_TYPE }), warnings: data.warnings, addedMessageId: !!data.addedMessageId };
     } catch (e) {
       if (e instanceof ConversionError) throw e;
-      throw new ConversionError(fileName, 'UNEXPECTED', `"${fileName}" could not be converted because of an unexpected error: ${e.message || e}`, e);
+      throw new ConversionError(fileName, 'UNEXPECTED', unexpectedMessage(`"${fileName}"`, e.message || e), e);
     } finally {
       worker.terminate();
     }

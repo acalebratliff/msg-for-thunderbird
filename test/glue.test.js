@@ -107,8 +107,8 @@ test('warnings of embedded messages are collected with their message named', asy
 
 test('bad input gives an honest ConversionError, never an empty message', async () => {
   const cases = [
-    ['not-a-msg.msg', fx('not-a-msg.msg'), 'NOT_MSG', /is not an Outlook message \(\.msg\) file/],
-    ['truncated.msg', fx('truncated.msg'), 'CORRUPT_CFB', /could not be converted: The file is damaged and cannot be read/],
+    ['not-a-msg.msg', fx('not-a-msg.msg'), 'NOT_MSG', /^"not-a-msg\.msg" was not opened\. It is not an Outlook \.msg file\.$/],
+    ['truncated.msg', fx('truncated.msg'), 'CORRUPT_CFB', /^"truncated\.msg" could not be opened\. The file is damaged and cannot be read/],
     ['empty.msg', new Uint8Array(0), 'BAD_INPUT', /is empty or could not be read/],
   ];
   for (const [name, bytes, code, re] of cases) {
@@ -189,7 +189,7 @@ test('attachment path: one bad attachment is reported and the others still open'
   assert.equal(api.calls.open.length, 1);
   assert.equal(api.calls.open[0].file.name, 'good.eml');
   assert.equal(notice.notices.length, 1);
-  assert.match(notice.notices[0].lines[0], /"bad.msg" is not an Outlook message/);
+  assert.match(notice.notices[0].lines[0], /^"bad.msg" was not opened\. It is not an Outlook \.msg file\.$/);
   assert.ok(res[0].error && !res[1].error);
 });
 
@@ -251,9 +251,9 @@ test('import path: messages.import gets the .eml and the folder', async () => {
 
 test('import path: a duplicate Message-ID and other failures are worded plainly', async () => {
   const dup = fakeApi({ importError: 'Destination folder already contains a message with id <simple.fixture@example.com>' });
-  await assert.rejects(importMsgFile(dup, convert, fxFile('simple.msg'), 'f'), (e) => e.code === 'DUPLICATE' && /same Message-ID/.test(e.message));
+  await assert.rejects(importMsgFile(dup, convert, fxFile('simple.msg'), 'f'), (e) => e.code === 'DUPLICATE' && e.message === '"simple.msg" was not imported. That folder already has this message.');
   const other = fakeApi({ importError: 'Folder is read-only' });
-  await assert.rejects(importMsgFile(other, convert, fxFile('simple.msg'), 'f'), (e) => e.code === 'IMPORT_FAILED' && /converted but could not be imported: Folder is read-only/.test(e.message));
+  await assert.rejects(importMsgFile(other, convert, fxFile('simple.msg'), 'f'), (e) => e.code === 'IMPORT_FAILED' && e.message === '"simple.msg" could not be imported into that folder (Folder is read-only). Try another folder.');
   await assert.rejects(importMsgFile(fakeApi(), convert, fxFile('truncated.msg'), 'f'), ConversionError);
 });
 
@@ -265,13 +265,13 @@ test('messagesOf accepts a MessageList or an array', () => {
 
 test('files over the size cap are refused before they are read', async () => {
   const big = { name: 'huge.msg', size: MAX_MSG_BYTES + 1, arrayBuffer: async () => { throw new Error('must not be read'); } };
-  await assert.rejects(convertFile(convert, big), (e) => e.code === 'TOO_LARGE' && /"huge.msg" is 25\.0 MB, larger than the 25 MB this add-on opens; it was not opened\./.test(e.message));
+  await assert.rejects(convertFile(convert, big), (e) => e.code === 'TOO_LARGE' && e.message === '"huge.msg" was not opened. It is 25.0 MB, and this add-on opens files up to 25 MB.');
   assert.throws(() => convertMsgBytes(core, new Uint8Array(MAX_MSG_BYTES + 1), 'x.msg'), (e) => e.code === 'TOO_LARGE');
   const api = fakeApi({ attachments: { '1.2': new File([fx('simple.msg')], 'big.msg') }, listed: [{ partName: '1.2', name: 'big.msg', size: MAX_MSG_BYTES + 5 }] });
   const notice = noticeRecorder();
   await openMsgAttachments(api, convert, { id: 3 }, [{ name: 'big.msg', partName: '1.2', size: MAX_MSG_BYTES + 5 }], { showNotice: notice });
   assert.equal(api.calls.getAttachmentFile.length, 0);
-  assert.match(notice.notices[0].lines[0], /larger than the 25 MB/);
+  assert.match(notice.notices[0].lines[0], /this add-on opens files up to 25 MB\.$/);
 });
 
 test('attachment path: a large attachment shows "Converting…" and closes it when opened', async () => {
@@ -324,7 +324,7 @@ test('the worker converts and reports errors in the same shape', async () => {
   assert.match(Buffer.from(posted[0].eml).toString('latin1'), /^Message-ID: <[0-9a-f]{32}@msg-opener\.invalid>\r\n/);
   await self.onmessage({ data: { buf: fx('not-a-msg.msg').buffer.slice(0), fileName: 'n.msg', options: {} } });
   assert.deepEqual(posted[1], { ok: false, error: { code: 'NOT_MSG', fileName: 'n.msg', message: posted[1].error.message } });
-  assert.match(posted[1].error.message, /is not an Outlook message/);
+  assert.match(posted[1].error.message, /was not opened\. It is not an Outlook \.msg file\./);
   delete globalThis.self;
 });
 
@@ -358,4 +358,15 @@ test('a converted message gets a stable Message-ID from the file content only wh
   assert.equal(c.warnings.length, 0);
   const other = await ensureMessageId(convertMsgBytes(core, fx('hostile-css.msg'), 'h.msg'), fx('hostile-css.msg'));
   assert.notEqual(/Message-ID: (\S+)/.exec(Buffer.from(other.eml).toString('latin1'))[1], id[1]);
+});
+
+test('an error in the add-on itself says where to report it', async () => {
+  const api = fakeApi({ attachments: { '1.2': new File([fx('simple.msg')], 'simple.msg') } });
+  api.messageDisplay.open = async () => { throw new Error('boom'); };
+  const notice = noticeRecorder();
+  await openMsgAttachments(api, convert, { id: 3 }, [{ name: 'simple.msg', partName: '1.2' }], { showNotice: notice });
+  assert.equal(notice.notices[0].lines[0], '"simple.msg" could not be opened because of an error in the add-on (boom). Please report it at github.com/acalebratliff/msg-for-thunderbird/issues.');
+  const n2 = noticeRecorder();
+  await openMsgAttachments(fakeApi({ displayed: [] }), convert, { id: 3 }, [{ name: 'a.msg', partName: '1' }], { showNotice: n2 });
+  assert.match(n2.notices[0].lines[0], /^Thunderbird could not tell which message the attachment belongs to \(no message is displayed\)\. Open that message on its own, then try again\.$/);
 });

@@ -23,13 +23,13 @@ check('disk: warnings.msg, nested.msg, hostile-css.msg open with a visible bar i
       lambda: all(bar_ok(tabs_by('disk')[s]) for s in ['Synthetic message with warnings', 'Synthetic outer message', 'Synthetic message hiding elements']), True)
 check('disk: hidden body -> warnings go to a notice window instead',
       lambda: tabs_by('disk')['Synthetic message with a hidden body']['bar'] is None and any('hidden-body.msg' in n and 'Some details differ from the original' in n for n in d['disk']['notices']), True)
-check('disk: not-a-msg.msg gets an honest error', lambda: any('"not-a-msg.msg" is not an Outlook message (.msg) file' in x for x in d['disk']['results']), True)
-check('disk: 26 MB file refused by the size cap', lambda: any('larger than the 25 MB this add-on opens; it was not opened' in x for x in d['disk']['results']), True)
+check('disk: not-a-msg.msg gets an honest error', lambda: any('"not-a-msg.msg" was not opened. It is not an Outlook .msg file.' in x for x in d['disk']['results']), True)
+check('disk: 26 MB file refused by the size cap', lambda: any('was not opened. It is 26.0 MB, and this add-on opens files up to 25 MB.' in x for x in d['disk']['results']), True)
 check('disk: 20 MB file opens', lambda: any('Opened' in x for x in d['disk-big']['results']) and d['disk-big']['tabs'], True)
 check('attachment: warnings.msg opens with a visible bar', lambda: bar_ok(d['attachment:warnings.msg']['newTabs'][0]))
 check('attachment: nested.msg opens', lambda: d['attachment:nested.msg']['newTabs'][0]['subject'] == 'Synthetic outer message')
 check('attachment: not-a-msg.msg gives an error notice and opens nothing',
-      lambda: not d['attachment:not-a-msg.msg']['newTabs'] and any('is not an Outlook message' in n for n in d['attachment:not-a-msg.msg']['notices']))
+      lambda: not d['attachment:not-a-msg.msg']['newTabs'] and any('It is not an Outlook .msg file.' in n for n in d['attachment:not-a-msg.msg']['notices']))
 check('attachment: 20 MB opens, "Converting" notice shown then closed',
       lambda: d['attachment:big-20mb.msg']['newTabs'] and any('Converting "big-20mb.msg"' in t for t in d['attachment:big-20mb.msg']['seen'])
       and not any('Converting' in n for n in d['attachment:big-20mb.msg']['notices']))
@@ -40,9 +40,9 @@ check('menu: .msg -> .txt -> .msg: opens, hidden, then present and opens again',
       and d['attachment:seq3:warnings.msg']['menu'].get('clicked') and d['attachment:seq3:warnings.msg']['newTabs'])
 check('import: with/without Message-ID each imported once, duplicates refused, damaged file reported',
       lambda: d['import']['radioChecked'] and d['import']['after'] == d['import']['before'] + 2
-      and 'Imported into Local Folders › Smoke' in d['import']['results'][0] and 'same Message-ID' in d['import']['results'][1]
+      and 'Imported into Local Folders › Smoke' in d['import']['results'][0] and 'That folder already has this message.' in d['import']['results'][1]
       and 'is damaged and cannot be read' in d['import']['results'][2]
-      and 'Imported into Local Folders › Smoke' in d['import']['results'][3] and 'same Message-ID' in d['import']['results'][4], True)
+      and 'Imported into Local Folders › Smoke' in d['import']['results'][3] and 'so one was added' in d['import']['results'][3] and 'That folder already has this message.' in d['import']['results'][4], True)
 for k in ['disk-big', 'attachment:big-20mb.msg']:
     if k in d: print(f'info {k}: {d[k].get("ms")} ms, biggest UI-thread gap {d[k].get("uiMaxGapMs")} ms')
 print(f'Thunderbird {d.get("appVersion")}, extensions remote: {d.get("remoteExtensions")}')

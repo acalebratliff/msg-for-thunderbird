@@ -26,7 +26,7 @@ export function makeProgress(api) {
   async function progress(name) {
     const token = (globalThis.crypto && crypto.randomUUID) ? crypto.randomUUID() : String(Math.random()).slice(2);
     active.add(token);
-    openNotice(api, { title: `Converting "${name}"…`, lines: ['The message opens in a new tab when it is ready.'], token }).catch(() => {});
+    openNotice(api, { title: `Converting "${name}"…`, lines: ['It opens in a new tab when it is ready. A large file can take several seconds.'], token }).catch(() => {});
     return {
       async done() {
         active.delete(token);

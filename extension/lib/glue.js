@@ -47,7 +47,6 @@ export class ConversionError extends Error {
   }
 }
 
-const NOT_MSG_HINT = 'Only Outlook .msg files can be opened this way.';
 
 /** Largest .msg this add-on converts. Conversion needs several times the file size in memory. */
 export const MAX_MSG_BYTES = 25 * 1024 * 1024;
@@ -59,17 +58,24 @@ const mb = (n) => `${(n / (1024 * 1024)).toFixed(1)} MB`;
 export function checkSize(fileName, size) {
   if (typeof size === 'number' && size > MAX_MSG_BYTES) {
     throw new ConversionError(fileName, 'TOO_LARGE',
-      `"${fileName}" is ${mb(size)}, larger than the ${MAX_MSG_BYTES / (1024 * 1024)} MB this add-on opens; it was not opened.`);
+      `"${fileName}" was not opened. It is ${mb(size)}, and this add-on opens files up to ${MAX_MSG_BYTES / (1024 * 1024)} MB.`);
   }
+}
+
+export const ISSUES_URL = 'github.com/acalebratliff/msg-for-thunderbird/issues';
+
+/** Text for an error in the add-on itself: says what happened and where to report it. */
+export function unexpectedMessage(quotedName, detail) {
+  return `${quotedName} could not be opened because of an error in the add-on (${detail}). Please report it at ${ISSUES_URL}.`;
 }
 
 function userMessage(fileName, e) {
   const name = fileName ? `"${fileName}"` : 'The file';
   const detail = e && typeof e.message === 'string' && e.message ? e.message : String(e);
-  if (e && e.code === 'NOT_MSG') return `${name} is not an Outlook message (.msg) file. ${NOT_MSG_HINT}`;
+  if (e && e.code === 'NOT_MSG') return `${name} was not opened. It is not an Outlook .msg file.`;
   if (e && e.code === 'BAD_INPUT') return `${name} is empty or could not be read.`;
-  if (e && e.code) return `${name} could not be converted: ${detail}`;
-  return `${name} could not be converted because of an unexpected error: ${detail}`;
+  if (e && e.code) return `${name} could not be opened. ${detail}`;
+  return unexpectedMessage(name, detail);
 }
 
 /**
@@ -290,8 +296,8 @@ export async function importMsgFile(api, convert, file, folderId, { options } = 
     const detail = e && e.message ? e.message : String(e);
     const dup = /message-id|already/i.test(detail);
     throw new ConversionError(file.name, dup ? 'DUPLICATE' : 'IMPORT_FAILED', dup
-      ? `"${file.name}" was not imported: the folder already has a message with the same Message-ID.`
-      : `"${file.name}" was converted but could not be imported: ${detail}`, e);
+      ? `"${file.name}" was not imported. That folder already has this message.`
+      : `"${file.name}" could not be imported into that folder (${detail}). Try another folder.`, e);
   }
   return { header, warnings };
 }
@@ -354,7 +360,7 @@ export async function openMsgAttachments(api, convert, tab, attachments, { showN
   try {
     messageId = await findClickedMessage(api, tab, atts);
   } catch (e) {
-    await notice({ title: 'The attachment could not be opened', lines: [`Thunderbird did not say which message the attachment belongs to (${e.message}).`] });
+    await notice({ title: 'The attachment could not be opened', lines: [`Thunderbird could not tell which message the attachment belongs to (${e.message}). Open that message on its own, then try again.`] });
     return results;
   }
   for (const att of atts) {
@@ -373,7 +379,7 @@ export async function openMsgAttachments(api, convert, tab, attachments, { showN
       results.push({ name: att.name, tab: tabOpened, warnings, shown });
     } catch (e) {
       if (busy) await busy.done();
-      const msg = e instanceof ConversionError ? e.message : `"${att.name}" could not be opened: ${e && e.message ? e.message : e}`;
+      const msg = e instanceof ConversionError ? e.message : unexpectedMessage(`"${att.name}"`, e && e.message ? e.message : e);
       await notice({ title: 'The attachment could not be opened', lines: [msg] });
       results.push({ name: att.name, error: msg });
     }

@@ -1,7 +1,7 @@
 // The add-on page: pick or drop .msg files, then open each one or import it
 // into a folder. All DOM is built with createElement and textContent.
 import * as core from '../core/msg-eml-core.js';
-import { openMsgFile, importMsgFile, ConversionError, warningHeading } from '../lib/glue.js';
+import { openMsgFile, importMsgFile, ConversionError, unexpectedMessage } from '../lib/glue.js';
 import { makeShowNotice } from '../lib/notice.js';
 import { workerConverter } from '../lib/worker-converter.js';
 
@@ -31,8 +31,13 @@ async function loadFolders() {
     opt.value = f.id;
     folderSelect.append(opt);
   }
-  if (!folders.length) folderSelect.append(el('option', 'No folder can take messages'));
   foldersLoaded = true;
+  if (!folders.length) {
+    // Nothing to import into: say so and turn Import off.
+    folderSelect.append(el('option', 'No folder can receive messages'));
+    document.querySelector('input[name="mode"][value="import"]').disabled = true;
+    setMode('open');
+  }
 }
 
 function mode() {
@@ -52,7 +57,7 @@ for (const r of document.querySelectorAll('input[name="mode"]')) {
       try {
         await loadFolders();
       } catch (e) {
-        addResult('Folders', `The folder list could not be read: ${e.message || e}`, true);
+        addResult('Folders', `The folder list could not be read (${e.message || e}). Close this tab and click Open .msg again.`, true);
       }
     }
   });
@@ -69,7 +74,7 @@ function addResult(name, status, isError, warnings) {
       statusEl.className = err ? 'status-err' : 'status-ok';
       if (warns && warns.length) {
         const box = el('div', null, 'warn');
-        box.append(el('div', warningHeading(name, warns.length)));
+        box.append(el('div', 'Some details differ from the original:'));
         const ul = el('ul');
         for (const w of warns) ul.append(el('li', w));
         box.append(ul);
@@ -96,10 +101,10 @@ async function handle(files) {
         row.update(`Imported into ${folderLabel}.`, false, warnings);
       } else {
         const { warnings } = await openMsgFile(api, convert, file, { showNotice });
-        row.update('Opened.', false, warnings);
+        row.update('Opened in a new tab.', false, warnings);
       }
     } catch (e) {
-      const msg = e instanceof ConversionError ? e.message : `"${file.name}" could not be opened: ${e && e.message ? e.message : e}`;
+      const msg = e instanceof ConversionError ? e.message : unexpectedMessage(`"${file.name}"`, e && e.message ? e.message : e);
       row.update(msg, true);
     }
   }

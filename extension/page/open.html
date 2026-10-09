@@ -13,12 +13,12 @@
 
   <fieldset>
     <legend>What to do with each file</legend>
-    <label><input type="radio" name="mode" value="open" checked> Open it in a message tab</label>
+    <label><input type="radio" name="mode" value="open" checked> Open in a new tab</label>
     <label><input type="radio" name="mode" value="import"> Import into folder:</label>
     <select id="folder" disabled aria-label="Folder to import into"></select>
   </fieldset>
 
-  <div id="drop" class="drop" tabindex="0">
+  <div id="drop" class="drop">
     <p>Drop .msg files here, or</p>
     <button type="button" id="choose">Choose files…</button>
     <input type="file" id="picker" multiple accept=".msg,application/vnd.ms-outlook" hidden>
