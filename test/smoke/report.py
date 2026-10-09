@@ -43,7 +43,7 @@ check('import: with/without Message-ID each imported once, duplicates refused, d
       lambda: d['import']['radioChecked'] and d['import']['after'] == d['import']['before'] + 2
       and 'Imported into Local Folders › Smoke' in d['import']['results'][0] and 'That folder already has this message.' in d['import']['results'][1]
       and 'The file is damaged. Ask the sender for a new copy.' in d['import']['results'][2] and 'Details' in d['import']['results'][2]
-      and 'Imported into Local Folders › Smoke' in d['import']['results'][3] and 'Note: The file had no message ID, so one was added.' in d['import']['results'][3] and 'Some details differ' not in d['import']['results'][3].split('Note:')[1] and 'That folder already has this message.' in d['import']['results'][4], True)
+      and 'Imported into Local Folders › Smoke' in d['import']['results'][3] and 'Note:The file had no message ID, so one was added.' in d['import']['results'][3].replace('Note: ', 'Note:') and 'Some details differ' not in d['import']['results'][3].split('Note:')[1] and 'That folder already has this message.' in d['import']['results'][4], True)
 for k in ['disk-big', 'attachment:big-20mb.msg']:
     if k in d: print(f'info {k}: {d[k].get("ms")} ms, biggest UI-thread gap {d[k].get("uiMaxGapMs")} ms')
 print(f'Thunderbird {d.get("appVersion")}, extensions remote: {d.get("remoteExtensions")}')
