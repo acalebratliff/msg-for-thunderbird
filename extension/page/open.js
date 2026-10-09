@@ -1,7 +1,7 @@
 // The add-on page: pick or drop .msg files, then open each one or import it
 // into a folder. All DOM is built with createElement and textContent.
 import * as core from '../core/msg-eml-core.js';
-import { openMsgFile, importMsgFile, ConversionError, unexpectedMessage } from '../lib/glue.js';
+import { openMsgFile, importMsgFile, ConversionError, unexpectedMessage, importableFolders } from '../lib/glue.js';
 import { makeShowNotice } from '../lib/notice.js';
 import { workerConverter } from '../lib/worker-converter.js';
 
@@ -23,7 +23,7 @@ async function loadFolders() {
   if (foldersLoaded) return;
   const accounts = await api.accounts.list(false);
   const names = new Map(accounts.map((a) => [a.id, a.name]));
-  const folders = await api.folders.query({ canAddMessages: true });
+  const folders = importableFolders(await api.folders.query({ canAddMessages: true }));
   folders.sort((a, b) => (names.get(a.accountId) || '').localeCompare(names.get(b.accountId) || '') || a.path.localeCompare(b.path));
   folderSelect.replaceChildren();
   for (const f of folders) {
@@ -69,16 +69,24 @@ function addResult(name, status, isError, warnings) {
   li.append(el('strong', name), document.createTextNode(' '), statusEl);
   $('results').append(li);
   return {
-    update(text, err, warns) {
+    update(text, err, warns, notes, details) {
       statusEl.textContent = text;
       statusEl.className = err ? 'status-err' : 'status-ok';
-      if (warns && warns.length) {
-        const box = el('div', null, 'warn');
-        box.append(el('div', 'Some details differ from the original:'));
+      const box = (heading, items) => {
+        const b = el('div', null, 'warn');
+        b.append(el('div', heading));
         const ul = el('ul');
-        for (const w of warns) ul.append(el('li', w));
-        box.append(ul);
-        li.append(box);
+        for (const w of items) ul.append(el('li', w));
+        b.append(ul);
+        li.append(b);
+      };
+      if (warns && warns.length) box('Some details differ from the original:', warns);
+      if (notes && notes.length) box('Note:', notes);
+      if (details) {
+        // Technical detail for bug reports, collapsed.
+        const d = el('details', null, 'details');
+        d.append(el('summary', 'Details'), el('div', details));
+        li.append(d);
       }
     },
   };
@@ -97,15 +105,15 @@ async function handle(files) {
     row.update('Converting…', false);
     try {
       if (imp) {
-        const { warnings } = await importMsgFile(api, convert, file, folderId);
-        row.update(`Imported into ${folderLabel}.`, false, warnings);
+        const { warnings, notes } = await importMsgFile(api, convert, file, folderId);
+        row.update(`Imported into ${folderLabel}.`, false, warnings, notes);
       } else {
         const { warnings } = await openMsgFile(api, convert, file, { showNotice });
         row.update('Opened in a new tab.', false, warnings);
       }
     } catch (e) {
       const msg = e instanceof ConversionError ? e.message : unexpectedMessage(`"${file.name}"`, e && e.message ? e.message : e);
-      row.update(msg, true);
+      row.update(msg, true, null, null, e instanceof ConversionError ? e.details : undefined);
     }
   }
 }

@@ -19,7 +19,7 @@ export function workerConverter(core, workerUrl = new URL('./convert-worker.js',
         worker.onmessageerror = () => reject(new Error('the converter sent an unreadable reply'));
         worker.postMessage({ buf, fileName, options: options || {} }, [buf]);
       });
-      if (!data.ok) throw new ConversionError(data.error.fileName, data.error.code, data.error.message);
+      if (!data.ok) throw new ConversionError(data.error.fileName, data.error.code, data.error.message, undefined, data.error.details);
       return { file: new File([data.eml], data.name, { type: EML_TYPE }), warnings: data.warnings, addedMessageId: !!data.addedMessageId };
     } catch (e) {
       if (e instanceof ConversionError) throw e;

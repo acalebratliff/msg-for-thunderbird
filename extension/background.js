@@ -1,7 +1,7 @@
 // Background (event page). Registers the attachment menu and the toolbar
 // button, and runs the attachment flow. No network access is used anywhere.
 import * as core from './core/msg-eml-core.js';
-import { openMsgAttachments, menuStateFor } from './lib/glue.js';
+import { openMsgAttachments, menuStateFor, NOTICE_TITLE } from './lib/glue.js';
 import { makeShowNotice, makeProgress } from './lib/notice.js';
 import { workerConverter } from './lib/worker-converter.js';
 
@@ -37,7 +37,7 @@ api.menus.onShown.addListener(async (info) => {
 api.menus.onClicked.addListener((info, tab) => {
   if (info.menuItemId !== MENU_ID) return;
   openMsgAttachments(api, convert, tab, info.attachments, { showNotice, progress }).catch((e) =>
-    showNotice({ title: 'The attachment could not be opened', lines: [String(e && e.message ? e.message : e)] }));
+    showNotice({ title: NOTICE_TITLE, lines: [String(e && e.message ? e.message : e)] }));
 });
 
 // A "Converting…" window that opened after its conversion finished asks here.

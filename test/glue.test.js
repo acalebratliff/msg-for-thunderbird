@@ -10,7 +10,7 @@ import * as core from '../core/msg-eml-core.js';
 import {
   isMsgAttachment, emlName, menuStateFor, ensureMessageId, hasMessageId, convertMsg, convertMsgBytes, convertFile, collectWarnings, ConversionError,
   openMsgFile, importMsgFile, openMsgAttachments, showWarnings, messagesOf, inThreadConverter,
-  MAX_MSG_BYTES,
+  MAX_MSG_BYTES, importableFolders, NOTICE_TITLE,
 } from '../extension/lib/glue.js';
 
 const convert = inThreadConverter(core);
@@ -108,14 +108,16 @@ test('warnings of embedded messages are collected with their message named', asy
 test('bad input gives an honest ConversionError, never an empty message', async () => {
   const cases = [
     ['not-a-msg.msg', fx('not-a-msg.msg'), 'NOT_MSG', /^"not-a-msg\.msg" was not opened\. It is not an Outlook \.msg file\.$/],
-    ['truncated.msg', fx('truncated.msg'), 'CORRUPT_CFB', /^"truncated\.msg" could not be opened\. The file is damaged and cannot be read/],
-    ['empty.msg', new Uint8Array(0), 'BAD_INPUT', /is empty or could not be read/],
+    ['truncated.msg', fx('truncated.msg'), 'CORRUPT_CFB', /^"truncated\.msg" could not be opened\. The file is damaged\. Ask the sender for a new copy\.$/],
+    ['empty.msg', new Uint8Array(0), 'BAD_INPUT', /^"empty\.msg" is empty or could not be read\. Check the file and try again\.$/],
   ];
   for (const [name, bytes, code, re] of cases) {
     assert.throws(() => convertMsg(core, bytes, name), (e) => e instanceof ConversionError && e.code === code && re.test(e.message) && e.message.includes(name));
   }
   const unreadable = { name: 'locked.msg', arrayBuffer: async () => { throw new Error('denied'); } };
-  await assert.rejects(convertFile(core, unreadable), (e) => e instanceof ConversionError && /could not be read/.test(e.message));
+  await assert.rejects(convertFile(core, unreadable), (e) => e instanceof ConversionError && e.message === '"locked.msg" is empty or could not be read. Check the file and try again.' && e.details === 'denied');
+  // The technical detail stays out of the sentence but is kept for bug reports.
+  assert.throws(() => convertMsg(core, fx('truncated.msg'), 't.msg'), (e) => /^The file is damaged and cannot be read \(detail: .+\)\.$/.test(e.details) && !e.message.includes('detail'));
 });
 
 test('disk path: a picked file opens with messageDisplay.open and no bar when clean', async () => {
@@ -243,10 +245,11 @@ test('import path: messages.import gets the .eml and the folder', async () => {
   assert.equal(api.calls.import[0][1], 'folder-1');
   assert.equal(r.header.id, 55);
   assert.ok(r.warnings.length >= 2);
-  assert.equal(r.warnings.at(-1), 'The file had no message ID, so one was added. Importing it twice into a folder will be refused.');
+  assert.deepEqual(r.notes, ['The file had no message ID, so one was added. Importing it twice into a folder will be refused.']);
+  assert.ok(!r.warnings.some((w) => /message ID/.test(w)), 'the note is not among the differences');
   assert.match(Buffer.from(await api.calls.import[0][0].arrayBuffer()).toString('latin1'), /^Message-ID: <[0-9a-f]{32}@msg-opener\.invalid>\r\n/);
   const withId = await importMsgFile(fakeApi(), convert, fxFile('simple.msg'), 'f');
-  assert.deepEqual(withId.warnings, [], 'a file with its own Message-ID gets no note');
+  assert.deepEqual(withId.notes, [], 'a file with its own Message-ID gets no note');
 });
 
 test('import path: a duplicate Message-ID and other failures are worded plainly', async () => {
@@ -323,7 +326,10 @@ test('the worker converts and reports errors in the same shape', async () => {
   assert.equal(posted[0].addedMessageId, true);
   assert.match(Buffer.from(posted[0].eml).toString('latin1'), /^Message-ID: <[0-9a-f]{32}@msg-opener\.invalid>\r\n/);
   await self.onmessage({ data: { buf: fx('not-a-msg.msg').buffer.slice(0), fileName: 'n.msg', options: {} } });
-  assert.deepEqual(posted[1], { ok: false, error: { code: 'NOT_MSG', fileName: 'n.msg', message: posted[1].error.message } });
+  assert.deepEqual(posted[1], { ok: false, error: { code: 'NOT_MSG', fileName: 'n.msg', message: posted[1].error.message, details: undefined } });
+  await self.onmessage({ data: { buf: fx('truncated.msg').buffer.slice(0), fileName: 't.msg', options: {} } });
+  assert.equal(posted[2].error.message, '"t.msg" could not be opened. The file is damaged. Ask the sender for a new copy.');
+  assert.match(posted[2].error.details, /^The file is damaged and cannot be read \(detail: /);
   assert.match(posted[1].error.message, /was not opened\. It is not an Outlook \.msg file\./);
   delete globalThis.self;
 });
@@ -369,4 +375,21 @@ test('an error in the add-on itself says where to report it', async () => {
   const n2 = noticeRecorder();
   await openMsgAttachments(fakeApi({ displayed: [] }), convert, { id: 3 }, [{ name: 'a.msg', partName: '1' }], { showNotice: n2 });
   assert.match(n2.notices[0].lines[0], /^Thunderbird could not tell which message the attachment belongs to \(no message is displayed\)\. Open that message on its own, then try again\.$/);
+});
+
+test('import folder list leaves out Trash, Junk, Outbox and Drafts', () => {
+  const f = (name, specialUse) => ({ id: name, name, path: `/${name}`, specialUse });
+  const all = [f('Inbox', ['inbox']), f('Trash', ['trash']), f('Junk', ['junk']), f('Outbox', ['outbox']), f('Drafts', ['drafts']),
+    f('Sent', ['sent']), f('Archive', ['archives']), f('Smoke', []), f('Old', undefined)];
+  assert.deepEqual(importableFolders(all).map((x) => x.name), ['Inbox', 'Sent', 'Archive', 'Smoke', 'Old']);
+});
+
+test('error notices: title does not repeat the first line; damaged-file details come after it', async () => {
+  const api = fakeApi({ attachments: { '1.2': new File([fx('truncated.msg')], 'bad.msg') } });
+  const notice = noticeRecorder();
+  await openMsgAttachments(api, convert, { id: 3 }, [{ name: 'bad.msg', partName: '1.2' }], { showNotice: notice });
+  const n = notice.notices[0];
+  assert.equal(n.title, NOTICE_TITLE);
+  assert.deepEqual(n.lines, ['"bad.msg" could not be opened. The file is damaged. Ask the sender for a new copy.']);
+  assert.match(n.details, /^The file is damaged and cannot be read \(detail: /);
 });

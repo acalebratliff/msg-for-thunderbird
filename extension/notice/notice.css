@@ -4,3 +4,4 @@ body { margin: 0; padding: 16px; background: var(--bg); color: var(--fg); font: 
 h1 { font-size: 15px; margin: 0 0 8px; }
 ul { padding-left: 20px; margin: 0 0 16px; }
 li { margin: 4px 0; overflow-wrap: anywhere; }
+#details { margin: 16px 0; font-size: 12px; overflow-wrap: anywhere; opacity: 0.8; }

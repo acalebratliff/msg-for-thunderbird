@@ -11,8 +11,8 @@ function openNotice(api, data) {
 }
 
 export function makeShowNotice(api) {
-  return async function showNotice({ title, lines }) {
-    openNotice(api, { title, lines }).catch((e) => console.error('MSG Opener:', title, lines, e));
+  return async function showNotice({ title, lines, details }) {
+    openNotice(api, { title, lines, details }).catch((e) => console.error('MSG Opener:', title, lines, e));
   };
 }
 

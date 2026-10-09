@@ -15,6 +15,12 @@ for (const line of Array.isArray(data.lines) ? data.lines : []) {
   li.textContent = String(line);
   ul.append(li);
 }
+if (data.details) {
+  // Technical detail for bug reports, after a blank line.
+  const p = document.getElementById('details');
+  p.textContent = `Details: ${String(data.details)}`;
+  p.hidden = false;
+}
 document.getElementById('close').addEventListener('click', () => window.close());
 if (data.token) {
   globalThis.messenger.runtime.onMessage.addListener((msg) => {

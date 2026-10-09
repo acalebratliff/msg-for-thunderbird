@@ -38,14 +38,22 @@ export function emlName(msgName) {
 
 /** A file that could not be converted. `message` is a sentence fit to show the user. */
 export class ConversionError extends Error {
-  constructor(fileName, code, message, cause) {
+  /** details: technical text kept out of the sentence, shown collapsed (for bug reports). */
+  constructor(fileName, code, message, cause, details) {
     super(message);
     this.name = 'ConversionError';
     this.fileName = fileName;
     this.code = code;
     if (cause !== undefined) this.cause = cause;
+    if (details) this.details = details;
   }
 }
+
+/** Title of error notices; the first line says what happened, so the title does not repeat it. */
+export const NOTICE_TITLE = 'MSG Opener for Thunderbird';
+
+/** Codes for files whose structure is broken. */
+const DAMAGED = new Set(['CORRUPT_CFB', 'UNREADABLE']);
 
 
 /** Largest .msg this add-on converts. Conversion needs several times the file size in memory. */
@@ -73,7 +81,8 @@ function userMessage(fileName, e) {
   const name = fileName ? `"${fileName}"` : 'The file';
   const detail = e && typeof e.message === 'string' && e.message ? e.message : String(e);
   if (e && e.code === 'NOT_MSG') return `${name} was not opened. It is not an Outlook .msg file.`;
-  if (e && e.code === 'BAD_INPUT') return `${name} is empty or could not be read.`;
+  if (e && e.code === 'BAD_INPUT') return `${name} is empty or could not be read. Check the file and try again.`;
+  if (e && DAMAGED.has(e.code)) return `${name} could not be opened. The file is damaged. Ask the sender for a new copy.`;
   if (e && e.code) return `${name} could not be opened. ${detail}`;
   return unexpectedMessage(name, detail);
 }
@@ -106,7 +115,8 @@ export function convertMsgBytes(core, bytes, fileName, options = {}) {
   try {
     out = core.convertMsgToEml(u8, options);
   } catch (e) {
-    throw new ConversionError(fileName, (e && e.code) || 'UNEXPECTED', userMessage(fileName, e), e);
+    const code = (e && e.code) || 'UNEXPECTED';
+    throw new ConversionError(fileName, code, userMessage(fileName, e), e, DAMAGED.has(code) && e && e.message ? e.message : undefined);
   }
   return { eml: out.eml, name: emlName(fileName), warnings: collectWarnings(out.report), report: out.report };
 }
@@ -165,7 +175,7 @@ export async function convertFile(convert, file, options) {
   try {
     buf = await file.arrayBuffer();
   } catch (e) {
-    throw new ConversionError(name, 'BAD_INPUT', `"${name}" could not be read.`, e);
+    throw new ConversionError(name, 'BAD_INPUT', userMessage(name, { code: 'BAD_INPUT' }), e, e && e.message ? e.message : undefined);
   }
   return convert(buf, name, options);
 }
@@ -287,8 +297,8 @@ export async function openMsgFile(api, convert, file, { showNotice, options } = 
 
 /** Convert a .msg File and import it into a mail folder. */
 export async function importMsgFile(api, convert, file, folderId, { options } = {}) {
-  const { file: eml, warnings: converted, addedMessageId } = await convertFile(convert, file, options);
-  const warnings = addedMessageId ? [...converted, ADDED_ID_NOTE] : converted;
+  const { file: eml, warnings, addedMessageId } = await convertFile(convert, file, options);
+  const notes = addedMessageId ? [ADDED_ID_NOTE] : [];
   let header;
   try {
     header = await api.messages.import(eml, folderId);
@@ -299,7 +309,15 @@ export async function importMsgFile(api, convert, file, folderId, { options } = 
       ? `"${file.name}" was not imported. That folder already has this message.`
       : `"${file.name}" could not be imported into that folder (${detail}). Try another folder.`, e);
   }
-  return { header, warnings };
+  return { header, warnings, notes };
+}
+
+/** Folder roles that are not a place to import mail into. */
+const NOT_FOR_IMPORT = new Set(['trash', 'junk', 'outbox', 'drafts']);
+
+/** The folders offered for import: those that can take messages, minus Trash, Junk, Outbox and Drafts. */
+export function importableFolders(folders) {
+  return (folders || []).filter((f) => !(f.specialUse || []).some((u) => NOT_FOR_IMPORT.has(String(u).toLowerCase())));
 }
 
 /**
@@ -360,7 +378,7 @@ export async function openMsgAttachments(api, convert, tab, attachments, { showN
   try {
     messageId = await findClickedMessage(api, tab, atts);
   } catch (e) {
-    await notice({ title: 'The attachment could not be opened', lines: [`Thunderbird could not tell which message the attachment belongs to (${e.message}). Open that message on its own, then try again.`] });
+    await notice({ title: NOTICE_TITLE, lines: [`Thunderbird could not tell which message the attachment belongs to (${e.message}). Open that message on its own, then try again.`] });
     return results;
   }
   for (const att of atts) {
@@ -380,7 +398,7 @@ export async function openMsgAttachments(api, convert, tab, attachments, { showN
     } catch (e) {
       if (busy) await busy.done();
       const msg = e instanceof ConversionError ? e.message : unexpectedMessage(`"${att.name}"`, e && e.message ? e.message : e);
-      await notice({ title: 'The attachment could not be opened', lines: [msg] });
+      await notice({ title: NOTICE_TITLE, lines: [msg], details: e instanceof ConversionError ? e.details : undefined });
       results.push({ name: att.name, error: msg });
     }
   }
