@@ -91,13 +91,13 @@ test('a plain .msg converts to a message/rfc822 File with no warnings', async ()
 
 test('the core warnings come through', () => {
   const r = convertMsg(core, fx('warnings.msg'), 'warnings.msg');
-  assert.ok(r.warnings.some((w) => /sender has no SMTP address/.test(w)), r.warnings.join('\n'));
-  assert.ok(r.warnings.some((w) => /no date/.test(w)));
+  assert.ok(r.warnings.some((w) => /^The file has no email address for the sender \(Exchange Person\)\./.test(w)), r.warnings.join('\n'));
+  assert.ok(r.warnings.includes('The file has no date, so the message has none.'));
 });
 
 test('warnings of embedded messages are collected with their message named', async () => {
   const r = convertMsg(core, fx('nested.msg'), 'nested.msg');
-  assert.ok(r.warnings.some((w) => /^In the attached message ".*": the file has no date/.test(w)), r.warnings.join('\n'));
+  assert.ok(r.warnings.some((w) => /^In the attached message ".*": The file has no date, so the message has none\.$/.test(w)), r.warnings.join('\n'));
   const eml = await text(r.file);
   assert.match(eml, /Content-Type: message\/rfc822/);
   assert.match(eml, /attached copy\.msg/);
@@ -108,7 +108,7 @@ test('warnings of embedded messages are collected with their message named', asy
 test('bad input gives an honest ConversionError, never an empty message', async () => {
   const cases = [
     ['not-a-msg.msg', fx('not-a-msg.msg'), 'NOT_MSG', /is not an Outlook message \(\.msg\) file/],
-    ['truncated.msg', fx('truncated.msg'), 'CORRUPT_CFB', /could not be converted: .*damaged/],
+    ['truncated.msg', fx('truncated.msg'), 'CORRUPT_CFB', /could not be converted: The file is damaged and cannot be read/],
     ['empty.msg', new Uint8Array(0), 'BAD_INPUT', /is empty or could not be read/],
   ];
   for (const [name, bytes, code, re] of cases) {

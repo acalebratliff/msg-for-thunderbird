@@ -41,7 +41,7 @@ check('menu: .msg -> .txt -> .msg: opens, hidden, then present and opens again',
 check('import: with/without Message-ID each imported once, duplicates refused, damaged file reported',
       lambda: d['import']['radioChecked'] and d['import']['after'] == d['import']['before'] + 2
       and 'Imported into Local Folders › Smoke' in d['import']['results'][0] and 'same Message-ID' in d['import']['results'][1]
-      and 'damaged structure' in d['import']['results'][2]
+      and 'is damaged and cannot be read' in d['import']['results'][2]
       and 'Imported into Local Folders › Smoke' in d['import']['results'][3] and 'same Message-ID' in d['import']['results'][4], True)
 for k in ['disk-big', 'attachment:big-20mb.msg']:
     if k in d: print(f'info {k}: {d[k].get("ms")} ms, biggest UI-thread gap {d[k].get("uiMaxGapMs")} ms')

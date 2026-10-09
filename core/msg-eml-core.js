@@ -3303,7 +3303,7 @@ var MINI_SECTOR = 64;
 var DIR_ENTRY = 128;
 var SIGNATURE = [208, 207, 17, 224, 161, 177, 26, 225];
 function corrupt(detail) {
-  return new MsgError("CORRUPT_CFB", `The file is not a readable Outlook .msg (damaged structure: ${detail}).`);
+  return new MsgError("CORRUPT_CFB", `The file is damaged and cannot be read (detail: ${detail}).`);
 }
 function checkCompoundFile(u8) {
   if (!(u8 instanceof Uint8Array)) throw new MsgError("BAD_INPUT", "Input must be a Uint8Array or ArrayBuffer.");
@@ -3820,7 +3820,7 @@ function readMsg(input, opts = {}, depth = 0) {
       parsed = parseOnce(u8, `cp${cpChoice.codepage}`);
       reparsed = true;
     } catch (e) {
-      warnings.push(`re-reading with code page ${cpChoice.codepage} failed; non-Unicode text may be wrong`);
+      warnings.push(`Some text may show the wrong characters (code page ${cpChoice.codepage} could not be applied).`);
     }
   }
   const { reader, data: d, extras } = parsed;
@@ -3880,7 +3880,9 @@ function readMsg(input, opts = {}, depth = 0) {
     warnings
   };
   model.html = readHtmlBody(d, extras.get(d), cp);
-  if (model.htmlProperty && model.html == null) warnings.push("message has a PidTagHtml property but no HTML could be read from it");
+  if (model.htmlProperty && model.html == null) {
+    warnings.push(`The HTML version of the body could not be read.${model.body ? " The plain-text version is shown." : ""}`);
+  }
   for (const rc of d.recipients || []) {
     const rx = collect(extras, rc, EXTRA_RECIP, cp);
     model.recipients.push({
@@ -3913,14 +3915,14 @@ function readMsg(input, opts = {}, depth = 0) {
         att.embedded = readMsg(g.content, opts, depth + 1);
         att.filename = att.filename || g.fileName || "";
       } else if (att.method === 2 || att.method === 3 || att.method === 4 || att.method === 7) {
-        att.error = "attachment is stored by reference (a link to a file outside the message), not its content";
+        att.error = "it is only a link to a file outside the message";
       } else {
         const g = reader.getAttachment(a);
         att.data = g.content instanceof Uint8Array ? g.content : new Uint8Array(g.content || []);
       }
     } catch (e) {
       if (e instanceof MsgError && e.code === "TOO_DEEP") throw e;
-      att.error = e instanceof MsgError ? e.message : `attachment could not be read (${e && e.message ? e.message : e})`;
+      att.error = e instanceof MsgError ? e.message : `it could not be read: ${e && e.message ? e.message : e}`;
     }
     model.attachments.push(att);
   });
@@ -4404,10 +4406,10 @@ function decompressRtf(input) {
   }
   if (rawSize > compSize * 9 + 4096) throw new Error("compressed RTF RAWSIZE is implausible");
   const actual = rtfCrc(input, 16, compSize + 4);
-  if (actual !== crc) warnings.push("compressed RTF CRC mismatch; content used anyway");
+  if (actual !== crc) warnings.push("The formatted body failed a check. It is shown as found and may contain errors.");
   const out = decompressRTF(input.subarray(0, compSize + 4));
   const len = Math.min(out.length, rawSize);
-  if (out.length < rawSize) warnings.push("compressed RTF is shorter than RAWSIZE");
+  if (out.length < rawSize) warnings.push("The formatted body is shorter than the file says. Some text may be missing.");
   const rtf = new Uint8Array(len);
   for (let i = 0; i < len; i++) rtf[i] = out[i] & 255;
   return { rtf: trimNulBytes(rtf), warnings };
@@ -4972,7 +4974,7 @@ function rrule(recur, zone, warnings) {
   const p = recur && recur.recurrencePattern;
   if (!p) return null;
   if (p.calendarType && p.calendarType !== 1 && p.calendarType !== 2 && p.calendarType !== 0) {
-    warnings.push("recurrence uses a non-Gregorian calendar; repeat rule not written");
+    warnings.push("The repeat schedule could not be carried over (it uses a non-Gregorian calendar). The first occurrence is shown.");
     return null;
   }
   const parts = [];
@@ -5007,7 +5009,7 @@ function rrule(recur, zone, warnings) {
       break;
     }
     default:
-      warnings.push(`recurrence pattern type ${p.patternType} is not supported; repeat rule not written`);
+      warnings.push(`The repeat schedule could not be carried over (pattern type ${p.patternType}). The first occurrence is shown.`);
       return null;
   }
   if (p.endType === 8226 && p.occurrenceCount > 0) parts.push(`COUNT=${p.occurrenceCount}`);
@@ -5077,7 +5079,7 @@ function buildCalendar(m, people, warnings) {
   if (method === "REPLY") {
     const org = people.attendees.find((at) => at.email && at.type !== "cc" && at.type !== "bcc");
     if (org) main.push(`ORGANIZER${cn(org)}:${mailto(org)}`);
-    else warnings.push("meeting response: the organizer is not known; ORGANIZER not written");
+    else warnings.push("The meeting organizer is not in the file.");
     if (people.organizer && people.organizer.email) {
       main.push(`ATTENDEE${cn(people.organizer)};PARTSTAT=${partstat}:${mailto(people.organizer)}`);
     }
@@ -5285,7 +5287,7 @@ function makeFormatter(opts, warnings) {
       email = headerAddrSpec(p.email, utf82);
       if (!email && !warned.has(p.email)) {
         warned.add(p.email);
-        warnings.push(`address ${JSON.stringify(p.email)} cannot be written in a 7-bit header (non-ASCII local part); shown as unresolved (option utf8Headers writes it as UTF-8, RFC 6532)`);
+        warnings.push(`The address ${JSON.stringify(p.email)} has characters that a mail header cannot carry. It is shown with a placeholder address.`);
       }
     }
     if (email) return p.name ? `${phrase(p.name)} <${email}>` : email;
@@ -5351,7 +5353,7 @@ function replayHeaders(hdrs, fmt, warnings) {
       }
       const val = addressListValue(v, fmt);
       if (val) out.push([k, val]);
-      else warnings.push(`stored ${k} header has no usable address; not copied`);
+      else warnings.push(`The original ${k} line has no usable address and was left out.`);
       continue;
     }
     out.push([k, unstructured(v)]);
@@ -5432,19 +5434,22 @@ function buildEml(m, opts = {}, depth = 0) {
   if (from.email && sender.email && from.email.toLowerCase() !== sender.email.toLowerCase()) {
     headers.push(["Sender", fmt(sender)]);
   }
-  if (fromStr && !from.email) warnings.push(`sender has no SMTP address in the file; From shows ${(opts.unresolvedAddress || "invalid-domain") === "name-only" ? "the name only" : "the name with a placeholder .invalid address"} ("${from.name}")`);
+  if (fromStr && !from.email) warnings.push(`The file has no email address for the sender (${from.name}). From shows ${(opts.unresolvedAddress || "invalid-domain") === "name-only" ? "the name only" : "a placeholder address ending in @unresolved.invalid"}. A reply will not reach them.`);
   const people = { to: [], cc: [], bcc: [] };
   let unresolved = 0;
   for (const rc of m.recipients) {
     const r = resolveRecipient(rc, ctx);
     if (!r.email && !r.name) {
-      warnings.push("a recipient with neither SMTP address nor name was dropped");
+      warnings.push("One recipient had no name or email address and was left out.");
       continue;
     }
     if (!r.email) unresolved++;
     (people[rc.type] || people.to).push({ ...r, type: rc.type });
   }
-  if (unresolved) warnings.push(`${unresolved} recipient(s) have no SMTP address in the file; shown ${(opts.unresolvedAddress || "invalid-domain") === "name-only" ? "by name only" : "with a placeholder .invalid address"}`);
+  if (unresolved) {
+    const nameOnly = (opts.unresolvedAddress || "invalid-domain") === "name-only";
+    warnings.push(`${unresolved === 1 ? "1 recipient has" : `${unresolved} recipients have`} no email address in the file. ${unresolved === 1 ? "It is" : "They are"} shown ${nameOnly ? "by name only" : "with a placeholder address ending in @unresolved.invalid"}.`);
+  }
   report.addresses.recipients = [...people.to, ...people.cc, ...people.bcc].map((p) => ({ type: p.type, name: p.name, email: p.email, source: p.source }));
   for (const [key, hn] of [["to", "To"], ["cc", "Cc"]]) {
     const list = people[key].map(fmt).filter(Boolean);
@@ -5461,7 +5466,7 @@ function buildEml(m, opts = {}, depth = 0) {
   const date = chooseDate(m, hdrs);
   report.date = date;
   if (date.value) headers.push(["Date", date.value]);
-  else warnings.push("the file has no date; no Date header written");
+  else warnings.push("The file has no date, so the message has none.");
   const mid = msgIdValue(m.messageId) || msgIdValue(headerValue(hdrs, "Message-ID"));
   if (mid) headers.push(["Message-ID", mid]);
   const irt = msgIdList(m.inReplyTo) || msgIdList(headerValue(hdrs, "In-Reply-To"));
@@ -5484,13 +5489,13 @@ function buildEml(m, opts = {}, depth = 0) {
         report.body = { kind: "smime-signed", htmlProperty: !!m.htmlProperty, note: "original signed MIME entity passed through unchanged" };
         return { bytes: serializeMessage(headers, Part.rawEntity(att.data), depth, ser), report };
       }
-      warnings.push("signed message is stored without its MIME header; written as an ordinary message with the signed content as an attachment, and the signature cannot be checked");
+      warnings.push("This is a signed message. It opens as an ordinary message with the signed content attached, and the signature cannot be checked.");
     } else {
       const st = smimeType(att.data, att.mime);
       const fname = att.filename || "smime.p7m";
       const p = Part.binary("application/pkcs7-mime", att.data, { filename: /\.p7[mz]$/i.test(fname) ? fname : "smime.p7m" });
       if (st) p.params.unshift(["smime-type", st]);
-      else warnings.push("S/MIME content type not recognised (neither signed nor enveloped); written without smime-type");
+      else warnings.push("The message's encryption or signature type was not recognised. It may not open correctly.");
       report.body = { htmlProperty: !!m.htmlProperty, kind: st === "signed-data" ? "smime-opaque-signed" : st === "enveloped-data" || st === "authEnveloped-data" ? "smime-encrypted" : "smime-unknown", smimeType: st };
       return { bytes: serializeMessage(headers, p, depth, ser), report };
     }
@@ -5520,7 +5525,7 @@ function buildEml(m, opts = {}, depth = 0) {
         report.body.textSource = "RTF (converted to plain text)";
       }
     } catch (e) {
-      warnings.push(`RTF body could not be decompressed (${e && e.message ? e.message : e})`);
+      warnings.push(`The formatted body could not be read (${e && e.message ? e.message : e}). Some text may be missing.`);
     }
   }
   if (html) html = htmlCharsetToUtf8(html);
@@ -5528,7 +5533,7 @@ function buildEml(m, opts = {}, depth = 0) {
   if (/^IPM\.(Appointment|Schedule\.Meeting)/i.test(cls)) {
     const organizer = from.email ? from : sender.email ? sender : null;
     calendar = buildCalendar(m, { organizer, attendees: [...people.to, ...people.cc, ...people.bcc], body: text || "" }, warnings);
-    if (!calendar) warnings.push("calendar item has no start time; no text/calendar part written");
+    if (!calendar) warnings.push("This calendar item has no start time, so no calendar file was attached.");
   }
   let vcard = null;
   if (m.contact) vcard = contactVcard(m.contact);
@@ -5538,7 +5543,7 @@ function buildEml(m, opts = {}, depth = 0) {
   for (const att of m.attachments) {
     const name = att.filename || att.displayName || "";
     if (att.error) {
-      warnings.push(`attachment "${name || att.index}" skipped: ${att.error}`);
+      warnings.push(`The attachment "${name || att.index}" was left out (${att.error}).`);
       report.attachments.push({ name, skipped: att.error });
       continue;
     }
@@ -5555,7 +5560,7 @@ function buildEml(m, opts = {}, depth = 0) {
       const c = stripTrailingNul(String(att.cid)).trim();
       const inner = c.startsWith("<") && c.endsWith(">") ? c.slice(1, -1) : c;
       if (isValidCid(inner)) cid = inner;
-      else warnings.push(`attachment "${cleanForReport(name || att.index)}" has an unusable Content-ID; it was left out`);
+      else warnings.push(`The inline attachment "${cleanForReport(name || att.index)}" could not be placed in the text, so it is attached as an ordinary file.`);
     }
     const referenced = cid && cidReferenced(cidRefs, cid);
     if (referenced) {
