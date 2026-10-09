@@ -38,7 +38,7 @@ Requires Thunderbird 140 or later (Manifest V3). Tested on Thunderbird
 - Damaged files are refused with a message; nothing is recovered from them.
 - A file with no Message-ID gets one made from the file's content, so importing
   the same file twice into a folder is refused. The warning bar says so, and
-  about half of real-world .msg files have no Message-ID, so the bar is common.
+  about half of the files in our test set had no Message-ID, so the bar is common.
 - Files over 25 MB are not opened. A 20 MB file takes two to three seconds from disk, seven to nine
   seconds as an attachment, and briefly
   uses about 400 MB more memory.
