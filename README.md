@@ -6,7 +6,7 @@ standard `.eml` message on your computer by
 and shown in Thunderbird's own message viewer. The add-on has no network
 permission and sends nothing anywhere.
 
-Written with AI assistance (Claude), reviewed and tested by the author.
+Written and tested with AI assistance (Claude). The author reviews and publishes.
 
 - **From an attachment:** right-click a `.msg` attachment, choose **Open as message**.
 - **From disk:** click the **Open .msg** toolbar button, then pick or drop files.
@@ -37,8 +37,10 @@ Requires Thunderbird 140 or later (Manifest V3). Tested on Thunderbird
   also carry a `.vcf`). They are not added to the calendar or address book.
 - Damaged files are refused with a message; nothing is recovered from them.
 - A file with no Message-ID gets one made from the file's content, so importing
-  the same file twice into a folder is refused. The warning bar says so.
-- Files over 25 MB are not opened. A 20 MB file takes a few seconds and briefly
+  the same file twice into a folder is refused. The warning bar says so, and
+  about half of real-world .msg files have no Message-ID, so the bar is common.
+- Files over 25 MB are not opened. A 20 MB file takes two to three seconds from disk, seven to nine
+  seconds as an attachment, and briefly
   uses about 400 MB more memory.
 - An opened message is a view of the file. To keep it in a folder, use
   **Import into folder**.
