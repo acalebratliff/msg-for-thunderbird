@@ -10,7 +10,7 @@ self.onmessage = async (ev) => {
     const bytes = new Uint8Array(buf);
     const r = await ensureMessageId(convertMsgBytes(core, bytes, fileName, options), bytes);
     const eml = r.eml.buffer.byteLength === r.eml.byteLength ? r.eml.buffer : r.eml.slice().buffer;
-    self.postMessage({ ok: true, eml, name: r.name, warnings: r.warnings }, [eml]);
+    self.postMessage({ ok: true, eml, name: r.name, warnings: r.warnings, addedMessageId: !!r.addedMessageId }, [eml]);
   } catch (e) {
     self.postMessage({ ok: false, error: { code: e.code || 'UNEXPECTED', message: e.message || String(e), fileName: e.fileName || fileName } });
   }

@@ -138,8 +138,9 @@ test('warnings are shown once as a bar in the opened tab', async () => {
   const inj = api.calls.inject[0];
   assert.equal(inj.target.tabId, 100);
   assert.equal(typeof inj.func, 'function');
-  assert.match(inj.args[0], /^Converted from "warnings.msg"\. 3 things could not be carried over exactly:$/);
-  assert.match(inj.args[1][2], /no Message-ID; one was made from the file's content \(<[0-9a-f]{32}@msg-opener\.invalid>\)/);
+  assert.equal(inj.args[0], 'Converted from "warnings.msg". Some details differ from the original:');
+  assert.equal(inj.args[1].length, 2, 'the added message ID is not shown when opening');
+  assert.ok(!inj.args[1].some((w) => /message ID/i.test(w)));
   assert.deepEqual(inj.args[1], r.warnings);
   assert.equal(notice.notices.length, 0);
 });
@@ -242,6 +243,10 @@ test('import path: messages.import gets the .eml and the folder', async () => {
   assert.equal(api.calls.import[0][1], 'folder-1');
   assert.equal(r.header.id, 55);
   assert.ok(r.warnings.length >= 2);
+  assert.equal(r.warnings.at(-1), 'The file had no message ID, so one was added. Importing it twice into a folder will be refused.');
+  assert.match(Buffer.from(await api.calls.import[0][0].arrayBuffer()).toString('latin1'), /^Message-ID: <[0-9a-f]{32}@msg-opener\.invalid>\r\n/);
+  const withId = await importMsgFile(fakeApi(), convert, fxFile('simple.msg'), 'f');
+  assert.deepEqual(withId.warnings, [], 'a file with its own Message-ID gets no note');
 });
 
 test('import path: a duplicate Message-ID and other failures are worded plainly', async () => {
@@ -314,7 +319,8 @@ test('the worker converts and reports errors in the same shape', async () => {
   assert.equal(posted[0].name, 'warnings.eml');
   assert.ok(posted[0].eml instanceof ArrayBuffer);
   assert.match(Buffer.from(posted[0].eml).toString('latin1'), /^Subject: Synthetic message with warnings$/m);
-  assert.equal(posted[0].warnings.length, 3);
+  assert.equal(posted[0].warnings.length, 2);
+  assert.equal(posted[0].addedMessageId, true);
   assert.match(Buffer.from(posted[0].eml).toString('latin1'), /^Message-ID: <[0-9a-f]{32}@msg-opener\.invalid>\r\n/);
   await self.onmessage({ data: { buf: fx('not-a-msg.msg').buffer.slice(0), fileName: 'n.msg', options: {} } });
   assert.deepEqual(posted[1], { ok: false, error: { code: 'NOT_MSG', fileName: 'n.msg', message: posted[1].error.message } });
@@ -343,6 +349,8 @@ test('a converted message gets a stable Message-ID from the file content only wh
   assert.ok(id);
   assert.deepEqual(Buffer.from(a.eml), Buffer.from(b.eml), 'same file, same id');
   assert.ok(hasMessageId(a.eml));
+  assert.equal(a.addedMessageId, true);
+  assert.deepEqual(a.warnings, convertMsgBytes(core, noId, 'w.msg').warnings, 'no warning line added');
   const withId = fx('simple.msg');
   const c = await ensureMessageId(convertMsgBytes(core, withId, 's.msg'), withId);
   assert.match(Buffer.from(c.eml).toString('latin1'), /^Message-ID: <simple\.fixture@example\.com>$/m);

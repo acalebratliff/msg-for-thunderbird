@@ -15,14 +15,14 @@ def check(name, fn, needs_page=False):
     results.append(ok); print(('PASS ' if ok else 'FAIL ') + name)
 ext = lambda: d['extension']
 tabs_by = lambda key: {t['subject']: t for t in d[key]['tabs']}
-def bar_ok(t): return t['bar'] and t['bar']['visible'] and t['bar']['closedShadow'] and 'could not be carried over' in t['bar']['text']
+def bar_ok(t): return t['bar'] and t['bar']['visible'] and t['bar']['closedShadow'] and 'Some details differ from the original' in t['bar']['text']
 check('no fatal error in the harness', lambda: 'fatal' not in d and d.get('end'))
 check('installs: MV3, active, no errors or warnings', lambda: ext()['manifestVersion'] == 3 and ext()['active'] and not ext()['errors'] and not ext()['warnings'])
 check('install grants exactly the 5 declared permissions', lambda: ext()['perms'] == ['accountsRead', 'menus', 'messagesImport', 'messagesRead', 'scripting'])
 check('disk: warnings.msg, nested.msg, hostile-css.msg open with a visible bar in a closed shadow root',
       lambda: all(bar_ok(tabs_by('disk')[s]) for s in ['Synthetic message with warnings', 'Synthetic outer message', 'Synthetic message hiding elements']), True)
 check('disk: hidden body -> warnings go to a notice window instead',
-      lambda: tabs_by('disk')['Synthetic message with a hidden body']['bar'] is None and any('hidden-body.msg' in n and 'could not be carried over' in n for n in d['disk']['notices']), True)
+      lambda: tabs_by('disk')['Synthetic message with a hidden body']['bar'] is None and any('hidden-body.msg' in n and 'Some details differ from the original' in n for n in d['disk']['notices']), True)
 check('disk: not-a-msg.msg gets an honest error', lambda: any('"not-a-msg.msg" is not an Outlook message (.msg) file' in x for x in d['disk']['results']), True)
 check('disk: 26 MB file refused by the size cap', lambda: any('larger than the 25 MB this add-on opens; it was not opened' in x for x in d['disk']['results']), True)
 check('disk: 20 MB file opens', lambda: any('Opened' in x for x in d['disk-big']['results']) and d['disk-big']['tabs'], True)

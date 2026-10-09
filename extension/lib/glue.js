@@ -118,10 +118,14 @@ export function hasMessageId(eml) {
   return /(^|\r\n)Message-ID:/i.test(end >= 0 ? head.slice(0, end) : head);
 }
 
+/** Shown on import when ensureMessageId added an id (not on open: there it changes nothing visible). */
+export const ADDED_ID_NOTE = 'The file had no message ID, so one was added. Importing it twice into a folder will be refused.';
+
 /**
  * Give a converted message with no Message-ID a stable one made from the
  * SHA-256 of the .msg file, so importing the same file twice is detected.
  * r: the result of convertMsgBytes; msgBytes: the .msg file. Async (WebCrypto).
+ * Sets addedMessageId: true when it added one.
  */
 export async function ensureMessageId(r, msgBytes) {
   if (hasMessageId(r.eml)) return r;
@@ -132,7 +136,7 @@ export async function ensureMessageId(r, msgBytes) {
   const eml = new Uint8Array(line.length + r.eml.length);
   eml.set(line, 0);
   eml.set(r.eml, line.length);
-  return { ...r, eml, warnings: [...r.warnings, `the file has no Message-ID; one was made from the file's content (${id}), so importing the same file twice is detected`] };
+  return { ...r, eml, addedMessageId: true };
 }
 
 /**
@@ -143,7 +147,7 @@ export function inThreadConverter(core) {
   return async (buf, fileName, options) => {
     const bytes = new Uint8Array(buf);
     const r = await ensureMessageId(convertMsgBytes(core, bytes, fileName, options), bytes);
-    return { file: new File([r.eml], r.name, { type: EML_TYPE }), warnings: r.warnings, report: r.report };
+    return { file: new File([r.eml], r.name, { type: EML_TYPE }), warnings: r.warnings, report: r.report, addedMessageId: !!r.addedMessageId };
   };
 }
 
@@ -238,7 +242,7 @@ export function injectWarningBar(heading, warnings) {
 }
 
 export function warningHeading(fileName, count) {
-  return `Converted from "${fileName}". ${count === 1 ? 'One thing' : `${count} things`} could not be carried over exactly:`;
+  return `Converted from "${fileName}". Some details differ from the original:`;
 }
 
 /**
@@ -277,7 +281,8 @@ export async function openMsgFile(api, convert, file, { showNotice, options } = 
 
 /** Convert a .msg File and import it into a mail folder. */
 export async function importMsgFile(api, convert, file, folderId, { options } = {}) {
-  const { file: eml, warnings } = await convertFile(convert, file, options);
+  const { file: eml, warnings: converted, addedMessageId } = await convertFile(convert, file, options);
+  const warnings = addedMessageId ? [...converted, ADDED_ID_NOTE] : converted;
   let header;
   try {
     header = await api.messages.import(eml, folderId);

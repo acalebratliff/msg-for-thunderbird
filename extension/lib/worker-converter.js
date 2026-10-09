@@ -20,7 +20,7 @@ export function workerConverter(core, workerUrl = new URL('./convert-worker.js',
         worker.postMessage({ buf, fileName, options: options || {} }, [buf]);
       });
       if (!data.ok) throw new ConversionError(data.error.fileName, data.error.code, data.error.message);
-      return { file: new File([data.eml], data.name, { type: EML_TYPE }), warnings: data.warnings };
+      return { file: new File([data.eml], data.name, { type: EML_TYPE }), warnings: data.warnings, addedMessageId: !!data.addedMessageId };
     } catch (e) {
       if (e instanceof ConversionError) throw e;
       throw new ConversionError(fileName, 'UNEXPECTED', `"${fileName}" could not be converted because of an unexpected error: ${e.message || e}`, e);
