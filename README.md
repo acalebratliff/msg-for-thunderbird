@@ -2,7 +2,7 @@
 
 A Thunderbird add-on that opens Outlook `.msg` files. Each file is converted to a
 standard `.eml` message on your computer by
-[msg-eml-core](https://github.com/acalebratliff/msg-eml-core/tree/9e900a272521fc06570f764e208597098b88152c)
+[msg-eml-core](https://github.com/acalebratliff/msg-eml-core/tree/3bfd1501f407103dd3b6a12c53f0fd5a10d69b31)
 and shown in Thunderbird's own message viewer. The add-on has no network
 permission and sends nothing anywhere.
 
@@ -16,9 +16,9 @@ Written and tested with AI assistance (Claude). The author reviews and publishes
 - **Messages inside messages:** embedded Outlook messages become attached
   messages that Thunderbird opens itself; a `.msg` file attached inside a
   converted message opens with the same right-click entry.
-- **What did not convert exactly** (for example a sender with no email address
-  in the file, or a missing date) is listed once in a bar at the top of the
-  opened message, or next to the file on the add-on page.
+- **When a detail differs from the original** (for example a sender with no
+  email address in the file, or a missing date), it is listed once in a bar at
+  the top of the opened message, or next to the file on the add-on page.
 
 Requires Thunderbird 140 or later (Manifest V3). Tested on Thunderbird
 140.17.0esr and 157.0.1, on Linux.
@@ -26,9 +26,10 @@ Requires Thunderbird 140 or later (Manifest V3). Tested on Thunderbird
 ## Limitations
 
 - Thunderbird 128 and older are not supported. Windows and macOS have not been tested.
-- If the file has no email address for the sender (common for mail from inside
-  an Exchange organisation), From shows the name with a made-up address ending
-  in `@unresolved.invalid`. Replying to it goes nowhere. The warning bar says so.
+- If the file has no email address for a sender or recipient (common for mail
+  from inside an Exchange organisation), they are shown with a placeholder
+  address ending in `@unresolved.invalid`. Replying to it goes nowhere. The
+  warning bar says so.
 - A file with no date gets no Date header. Where a file has no sent time, the
   date shown is when it was delivered or created.
 - A body that is true RTF is shown as plain text; the original formatting is
@@ -37,11 +38,10 @@ Requires Thunderbird 140 or later (Manifest V3). Tested on Thunderbird
   also carry a `.vcf`). They are not added to the calendar or address book.
 - Damaged files are refused with a message; nothing is recovered from them.
 - A file with no Message-ID gets one made from the file's content, so importing
-  the same file twice into a folder is refused. The warning bar says so, and
-  about half of the files in our test set had no Message-ID, so the bar is common.
-- Files over 25 MB are not opened. A 20 MB file takes two to three seconds from disk, seven to nine
-  seconds as an attachment, and briefly
-  uses about 400 MB more memory.
+  the same file twice into a folder is refused. The import result says so.
+- Files over 25 MB are not opened. In testing, a 20 MB file took 2 to 3 seconds
+  from disk and 7 to 9 seconds as an attachment, and briefly used about 400 MB
+  more memory. Thunderbird may pause briefly while a large attachment converts.
 - An opened message is a view of the file. To keep it in a folder, use
   **Import into folder**.
 - Only Outlook `.msg` files: not `.oft` templates, `.pst` files or `winmail.dat`.
