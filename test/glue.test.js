@@ -92,12 +92,12 @@ test('a plain .msg converts to a message/rfc822 File with no warnings', async ()
 test('the core warnings come through', () => {
   const r = convertMsg(core, fx('warnings.msg'), 'warnings.msg');
   assert.ok(r.warnings.some((w) => /^The file has no email address for the sender \(Exchange Person\)\./.test(w)), r.warnings.join('\n'));
-  assert.ok(r.warnings.includes('The file has no date, so the message has none.'));
+  assert.ok(r.warnings.includes('The file has no date, so no date is shown.'));
 });
 
 test('warnings of embedded messages are collected with their message named', async () => {
   const r = convertMsg(core, fx('nested.msg'), 'nested.msg');
-  assert.ok(r.warnings.some((w) => /^In the attached message ".*": The file has no date, so the message has none\.$/.test(w)), r.warnings.join('\n'));
+  assert.ok(r.warnings.some((w) => /^In the attached message ".*": The file has no date, so no date is shown\.$/.test(w)), r.warnings.join('\n'));
   const eml = await text(r.file);
   assert.match(eml, /Content-Type: message\/rfc822/);
   assert.match(eml, /attached copy\.msg/);
