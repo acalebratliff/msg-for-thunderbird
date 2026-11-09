@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "MSG Opener for Thunderbird",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Opens Outlook .msg email files in Thunderbird. The conversion runs on your computer; nothing is sent anywhere.",
   "browser_specific_settings": {
     "gecko": {

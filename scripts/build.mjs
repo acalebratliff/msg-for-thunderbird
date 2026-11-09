@@ -45,7 +45,9 @@ mkdirSync(join(stage, 'core'), { recursive: true });
 cpSync(join(root, 'extension'), stage, { recursive: true });
 for (const f of ['msg-eml-core.js', 'LICENSE', 'NOTICE', 'THIRD_PARTY_LICENSES']) cpSync(join(root, 'core', f), join(stage, 'core', f));
 cpSync(join(root, 'LICENSE'), join(stage, 'LICENSE'));
-cpSync(join(root, 'NOTICE'), join(stage, 'NOTICE'));
+// NOTICE.txt, not NOTICE: the XPI also holds notice/, and the two names collide
+// on case-insensitive disks. ATN's linter refuses such an archive.
+cpSync(join(root, 'NOTICE'), join(stage, 'NOTICE.txt'));
 
 function walk(dir) {
   return readdirSync(dir).flatMap((n) => {
@@ -55,7 +57,7 @@ function walk(dir) {
 }
 const expected = new Set([
   ...walk(join(root, 'extension')).map((p) => relative(join(root, 'extension'), p).split(sep).join('/')),
-  'core/msg-eml-core.js', 'core/LICENSE', 'core/NOTICE', 'core/THIRD_PARTY_LICENSES', 'LICENSE', 'NOTICE',
+  'core/msg-eml-core.js', 'core/LICENSE', 'core/NOTICE', 'core/THIRD_PARTY_LICENSES', 'LICENSE', 'NOTICE.txt',
 ]);
 const stale = walk(stage).map((p) => relative(stage, p).split(sep).join('/')).filter((n) => !expected.has(n));
 if (stale.length) {
